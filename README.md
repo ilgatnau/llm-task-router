@@ -14,6 +14,10 @@ OpenCode → self-hosted task router
 
 Candidate order is task-specific: see `online-pool.yaml`. For coding/architecture, the initial order is Gemini 3.8 Flash → Groq gpt-oss-120b → Gemini 3.5 Flash-Lite → Groq gpt-oss-20b → OpenRouter's task-specific free pool → Ollama. Missing keys and unconfirmed free-tier accounts are skipped. Model assignments are starting preferences, not benchmark claims that online inference always beats your local hardware.
 
+**Setup:** [Free providers](#configure-free-online-providers) · [Local development](#local-development-without-docker) · [Docker + WSL](#docker-option-ollama-running-in-wsl)
+
+**Usage:** [OpenCode setup](#configure-and-use-opencode) · [Routing configuration](#configure-routing) · [Dashboard](#local-dashboard) · [Quota and failover](#quota-failover-and-zero-spend-controls)
+
 ## Configure free online providers
 
 ```sh
@@ -105,6 +109,232 @@ docker compose exec ollama ollama pull qwen3:8b
 ```
 
 When switching to WSL Ollama, stop any previously started bundled instance with `docker compose --profile bundled stop ollama`. The starter container uses CPU inference; GPU configuration depends on your host. Local model size, quantization, context and concurrency determine RAM/VRAM needs. Change the three local model settings in `.env` and pull the corresponding Ollama tags (without `ollama_chat/`) to use other local models.
+
+## Configure and use OpenCode
+
+### Install the terminal client
+
+In WSL/Linux, use one of the installation methods in the [official OpenCode introduction](https://opencode.ai/docs/):
+
+```sh
+# If Node/npm is available:
+npm install -g opencode-ai
+opencode --version
+```
+
+Alternatively, the official installer is `curl -fsSL https://opencode.ai/install | bash`. These installation methods currently target **OpenCode 1**, matching the checked-in provider configuration. OpenCode 2 also uses the `opencode` command but has a separate distribution/migration workflow; check your existing installation before replacing it. See the official introduction for the current version-specific instructions. Node/npm is needed only if you choose the npm installation method, not for running this repository's Python router or dashboard.
+
+### Connect OpenCode to this router
+
+Start the router first, either with `python dev.py` or Docker as described above. In another terminal:
+
+```sh
+cd /path/to/llm-task-router
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/v1/models
+opencode --model task-router/auto
+```
+
+The repository's `opencode.json` is already configured. Its provider ID is `task-router`, and its default model is `task-router/auto`. The essential connection settings are:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "task-router/auto",
+  "provider": {
+    "task-router": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Task Router",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "apiKey": "local-only"
+      },
+      "models": {
+        "auto": { "name": "Automatic task routing", "tool_call": true }
+      }
+    }
+  }
+}
+```
+
+This is a minimal example; the checked-in file additionally registers every explicit local/online task alias. Keep those entries if you want to select them in OpenCode. The compatibility package is resolved by OpenCode; there is no separate frontend package installation in this repository.
+
+Point OpenCode at the **gateway's `/v1` URL**, not at LiteLLM port 4000, Ollama port 11434, or a hosted provider directly: those endpoints bypass the task router. If you start `dev.py --port 8001`, change `baseURL` to `http://127.0.0.1:8001/v1`.
+
+The `apiKey: "local-only"` value is a placeholder for this loopback gateway, not a provider credential and not a routing mode. `LOCAL_ONLY` in the router's environment controls that mode. Put real Gemini/Groq/OpenRouter keys and free-tier confirmations in `.env` (or your shell), not in `opencode.json`. You do not need to connect those providers separately inside OpenCode to use this gateway. The router's private LiteLLM key is also separate and is handled by `dev.py` automatically.
+
+### Use the router in another project
+
+Keep the router running from this checkout, then open OpenCode in the project you actually want it to work on. You can merge the repository's `provider.task-router` block and `model` setting into that project's existing `opencode.json`/`opencode.jsonc`, or into `~/.config/opencode/opencode.json`. Preserve existing settings rather than overwriting the file.
+
+For a one-command setup without copying the provider configuration:
+
+```sh
+cd /path/to/your-application
+OPENCODE_CONFIG=/absolute/path/to/llm-task-router/opencode.json opencode --model task-router/auto
+```
+
+`OPENCODE_CONFIG` selects an additional config file; it does not change OpenCode's working directory to the router checkout. OpenCode merges its configuration sources, and a project's settings can override conflicting custom/global keys. If the provider is missing or the URL is wrong, inspect the effective configuration in your project and merge the block there. See [OpenCode configuration locations and precedence](https://opencode.ai/docs/config/).
+
+### Pick automatic routing or a specific task pool
+
+In the terminal UI, use OpenCode's `/models` picker and select a model under **Task Router**. Or select it at launch with `--model`:
+
+| OpenCode model ID | Behavior |
+| --- | --- |
+| `task-router/auto` | Match the latest user request against `rules.yaml`; recommended default |
+| `task-router/free-code` | Online-first implementation pool, then local coder |
+| `task-router/free-architecture` | Online-first architecture pool, then local reasoning |
+| `task-router/free-cicd` | Online-first CI/CD pool, then local coder |
+| `task-router/free-tests` | Explicit online testing pool for harder tests, then local coder |
+| `task-router/local-code` | Always use the local coder; no hosted escalation |
+| `task-router/local-general` | Always use the local general model |
+| `task-router/local-reasoning` | Always use the local reasoning model |
+
+The `free-*` choices are task pools, not a promise that one specific hosted model is available. They still apply account eligibility, quota/cooldown checks, ordered failover, and local fallback. Explicit model selection overrides keyword rules; choose a local alias for an entire private session. With `LOCAL_ONLY=true`, automatic routing resolves locally and explicit `free-*` requests are rejected.
+
+When using `auto`, ordinary prompts are enough:
+
+```text
+Write unit tests for the login function.       → local coder
+Implement pagination for the users API.       → online code pool
+Review the service architecture.              → online architecture pool
+Create a GitHub Actions deployment pipeline.  → online CI/CD pool
+```
+
+Noninteractive examples, run from the application project with the provider configuration available:
+
+```sh
+opencode run --model task-router/auto "Write unit tests for the login function"
+opencode run --model task-router/free-architecture "Review the service architecture"
+opencode run --model task-router/local-code "Explain this function without using hosted models"
+```
+
+These commands perform real inference and can consume the selected provider's free quota. To check routing without inference, use the dashboard's **Where would this go?** panel, or:
+
+```sh
+curl http://127.0.0.1:8000/api/route-preview \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"Implement pagination for the users API","model":"auto"}'
+```
+
+The preview shows the matching rule, candidate chain, and first eligible candidate. Real eligibility may change later. The dashboard's latest-request panel shows the actual route after a real request reaches an upstream backend.
+
+Router prefixes such as `/tests`, `/code`, `/architect`, and `/private` are **message text recognized by the gateway**, not built-in OpenCode slash commands. OpenCode's TUI may intercept unknown slash commands before sending a request. In the TUI, use natural-language prompts or the model picker; use the following optional custom commands if you want slash shortcuts.
+
+### Optional OpenCode slash shortcuts
+
+Merge a `command` block like this into your OpenCode configuration, alongside the existing provider settings:
+
+```json
+{
+  "command": {
+    "tests": {
+      "description": "Routine unit tests with local Ollama",
+      "template": "Write routine unit tests for: $ARGUMENTS",
+      "model": "task-router/local-code"
+    },
+    "architect": {
+      "description": "Architecture using the free online pool",
+      "template": "Review the architecture and tradeoffs for: $ARGUMENTS",
+      "model": "task-router/free-architecture"
+    },
+    "code": {
+      "description": "Implementation using the free online pool",
+      "template": "Implement: $ARGUMENTS",
+      "model": "task-router/free-code"
+    },
+    "cicd": {
+      "description": "CI/CD using the free online pool",
+      "template": "Create or update the CI/CD configuration for: $ARGUMENTS",
+      "model": "task-router/free-cicd"
+    }
+  }
+}
+```
+
+Then `/tests login validation` runs the configured local testing command, while `/architect the authentication service` uses the online architecture pool. These command model choices intentionally override keyword routing. Check your current `/models` selection when returning to ordinary prompts. See [OpenCode custom commands](https://opencode.ai/docs/commands/) and [CLI options](https://opencode.ai/docs/cli/).
+
+The router's zero-spend restrictions apply only to requests sent through the `task-router` provider. Choosing a separately configured paid provider in OpenCode bypasses those restrictions. OpenCode tool permissions are independent of model routing; review proposed file edits and deployment actions under your normal project permissions.
+
+## Configure routing
+
+### Choose the right configuration file
+
+| File | What to configure |
+| --- | --- |
+| `opencode.json` | OpenCode gateway URL, default alias, visible model/task aliases, optional shortcuts |
+| `.env` | Shared provider keys, free-tier confirmations, local model tags and runtime mode |
+| `.env.local` | Development-only overrides, especially WSL Ollama URL and local quota database |
+| `rules.yaml` | Ordered task keyword/prefix matches and default route |
+| `online-pool.yaml` | Direct Gemini/Groq candidate order and per-model local request safety caps |
+| `free-pool.yaml` | Optional OpenRouter candidate order and exact `:free` IDs |
+| `litellm.yaml` | Local aliases and their Ollama adapter settings |
+
+OpenCode selects the task alias. The gateway selects the first eligible model in that task's pool. LiteLLM handles the final local Ollama path. Editing OpenCode's `model` setting alone does not reorder the gateway's provider pools.
+
+### Add or reorder a rule
+
+Each request using `auto` checks `rules.yaml` top to bottom, and the first matching Python regex wins. If no rule matches, `default` is used. For example, to keep formatting/lint work local, insert this rule **after explicit prefix rules and before broader keyword rules**, rather than replacing the whole file:
+
+```yaml
+- name: local-formatting
+  pattern: '(?i)\b(lint|format code|prettier|black)\b'
+  model: local-code
+```
+
+`(?i)` makes the pattern case-insensitive; `\b` matches word boundaries. The `model` must be one of the configured task/local aliases. Moving this rule above architecture or implementation matches gives it priority for mixed requests; moving it below them lets those rules win. Keep `/private` and other explicit prefixes near the top so generic keywords do not intercept them.
+
+Change `default: free-code` to another existing alias if desired. For a complete local-only session/system, prefer selecting a local model or setting `LOCAL_ONLY=true`; a local default alone does not override other rules that still select online pools.
+
+### Change the online model order or safety budgets
+
+Inside `online-pool.yaml`, the `tasks` lists define direct-provider order. This example tries Groq first for implementation; it does not replace your other task lists:
+
+```yaml
+tasks:
+  free-code: [groq-reasoning, gemini-flash, groq-fast, gemini-lite]
+```
+
+Each list entry references an existing entry under `models`. After direct candidates are exhausted, the corresponding `free-code` list in `free-pool.yaml` is tried, followed by the local coder. Architecture's final fallback is the local reasoning model.
+
+`daily_safety_cap` and `minute_safety_cap` in `online-pool.yaml` limit this router's attempts. They are local request budgets, not guaranteed provider allowances; increasing them does not increase your account's quota. Gemini/Groq token constraints can still cause 429 responses before a request budget runs out. Exact model IDs must remain on the reviewed allowlist in `router/online_pool.py`; do not add paid models to avoid quota errors.
+
+### Change local models and apply updates
+
+Set the desired Ollama tags in `.env`/`.env.local`:
+
+```dotenv
+LOCAL_CODE_MODEL=ollama_chat/qwen2.5-coder:7b
+LOCAL_GENERAL_MODEL=ollama_chat/qwen3:8b
+LOCAL_REASONING_MODEL=ollama_chat/qwen3:8b
+```
+
+Pull matching tags where Ollama runs, without the `ollama_chat/` prefix. Use an `OLLAMA_API_BASE` reachable from the LiteLLM process: native same-distro WSL usually uses `http://127.0.0.1:11434`; Docker may need a host/WSL address instead.
+
+| Change | How to apply it |
+| --- | --- |
+| Router Python/routing YAML in development | `dev.py` auto-reloads by default; restart manually with `--no-reload` |
+| UI assets in development | Refresh the browser; the same Python server serves them |
+| Environment, local model tags, LiteLLM config in development | Stop and restart `python dev.py` |
+| Rules/pool YAML in Docker | `docker compose restart router` (mounted configuration) |
+| Environment or application/UI code in Docker | `docker compose up -d --build`; add `--profile bundled` if used |
+| OpenCode configuration | Restart OpenCode and explicitly select `task-router/auto` or the intended alias |
+
+Finally, open **http://localhost:8000/**, inspect the rule/pool order, and preview representative tasks. Then run a small real OpenCode task to check tool calling and confirm the actual backend in the latest-routing panel.
+
+### Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Task Router missing in OpenCode | Run from the configured project or set `OPENCODE_CONFIG`; preserve all model entries; check project config overrides and OpenCode version |
+| Connection refused | Start `dev.py`/Docker; check `/health` and the gateway port in `baseURL` |
+| Every online task falls back locally | Check `.env` keys, free-tier confirmation flags, `LOCAL_ONLY`, safety budgets, and provider cooldowns in the dashboard |
+| Explicit online alias gets 403 | Router is in local-only mode; use a local alias or deliberately set `LOCAL_ONLY=false` and restart |
+| Ollama fallback fails | Verify the endpoint from the LiteLLM process's network context and that the chosen tags are downloaded |
+| A task routes unexpectedly | Check explicit model selection first, then rule priority using the dashboard preview; mixed tasks may need a specific task alias |
+| A slash shortcut does not work | Router prefixes are not automatically OpenCode commands; add the optional `command` entries or use the model picker |
+| Port already in use | Stop the other runtime or change dev ports; update OpenCode's `baseURL` to match |
 
 ## Local dashboard
 
