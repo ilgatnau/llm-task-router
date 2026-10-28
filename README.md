@@ -279,6 +279,25 @@ Then `/tests login validation` runs the configured local testing command, while 
 
 The router's zero-spend restrictions apply only to requests sent through the `task-router` provider. Choosing a separately configured paid provider in OpenCode bypasses those restrictions. OpenCode tool permissions are independent of model routing; review proposed file edits and deployment actions under your normal project permissions.
 
+### Show streamed thinking in OpenCode
+
+In OpenCode's terminal UI run **`/thinking`** to show reasoning blocks. This is a display toggle, not a command that makes every model reason. Use `Ctrl+T` to cycle available model variants. See [OpenCode thinking display](https://opencode.ai/docs/tui/#thinking).
+
+The fast default **Llama 3.2 3B does not emit an Ollama thinking channel**. Its answer text streams normally once generation starts. For an optional small thinking model, keep the fast defaults for routine work and override only `local-reasoning`:
+
+```sh
+ollama pull qwen3:1.7b
+python dev.py --local-model llama3.2:3b --reasoning-model qwen3:1.7b
+```
+
+In another terminal, launch OpenCode with `opencode --model task-router/local-reasoning`, then enter `/thinking`. Select the `thinking` variant with `Ctrl+T` if thinking needs to be explicitly enabled; `direct` requests no thinking where the model supports turning it off. The checked-in `local-reasoning` definition declares reasoning support and these two variants. This metadata does not add thinking support to a non-thinking model. Small models can still be unreliable with code/tool calls, and thinking can increase total latency.
+
+For a persistent configuration (including Docker), set `LOCAL_REASONING_MODEL=ollama_chat/qwen3:1.7b` in the relevant environment file and restart. `--reasoning-model` takes precedence over `--local-model` for that one alias. Other local models and online-first task rules are unchanged; explicit `task-router/local-reasoning` guarantees that the selected local thinking model is used rather than an online architecture pool.
+
+The streaming path is Ollama `message.thinking` → LiteLLM `delta.reasoning_content` → the router's unchanged SSE bytes → OpenCode reasoning blocks. The dashboard identifies reasoning/answer/tool-call phases and counts observed reasoning/answer chunks, without retaining their text. Chunk counts are not token counts. Routing logs indicate the phases only; emitted reasoning content goes to OpenCode, not the shared activity log.
+
+Neither OpenCode nor the router can show reasoning before the model emits it. Model loading, prompt prefill and large tool contexts can still produce an initial pause. The dashboard's waiting/elapsed/byte status remains useful during that period. Do not inject fabricated thinking text or progress messages into model responses. [Ollama thinking controls](https://docs.ollama.com/capabilities/thinking) explains how to inspect `/api/show` for supported settings; [Qwen3 1.7B](https://ollama.com/library/qwen3:1.7b) is the optional model used here.
+
 ## Configure routing
 
 ### Choose the right configuration file

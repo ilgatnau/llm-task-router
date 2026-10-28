@@ -180,6 +180,7 @@ async def completions(request: Request):
             async for chunk in upstream.aiter_raw():
                 activity.received(route, len(chunk))
                 observation.feed(chunk)
+                activity.observed(route, observation)
                 yield chunk
             activity.finish(route, 'failed' if observation.failed else 'completed',
                             'Upstream reported an error in the response stream.' if observation.failed else 'Upstream stream received in full.')

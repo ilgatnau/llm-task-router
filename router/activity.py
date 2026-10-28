@@ -22,6 +22,9 @@ class StreamObservation:
     def __init__(self):
         self.buffer = b''
         self.failed = False
+        self.reasoning_chunks = 0
+        self.answer_chunks = 0
+        self.phase = None
 
     def feed(self, chunk):
         self.buffer = (self.buffer + chunk)[-131072:]
@@ -35,6 +38,19 @@ class StreamObservation:
                 event = json.loads(data)
                 if isinstance(event, dict) and (event.get('error') or any(isinstance(c, dict) and c.get('finish_reason') == 'error' for c in (event.get('choices') or []))):
                     self.failed = True
+                if isinstance(event, dict):
+                    for choice in event.get('choices') or []:
+                        delta = choice.get('delta') if isinstance(choice, dict) else None
+                        if not isinstance(delta, dict):
+                            continue
+                        if delta.get('reasoning_content') or delta.get('reasoning'):
+                            self.reasoning_chunks += 1
+                            self.phase = 'reasoning'
+                        if delta.get('content'):
+                            self.answer_chunks += 1
+                            self.phase = 'answer'
+                        if delta.get('tool_calls'):
+                            self.phase = 'tool-call'
             except (ValueError, TypeError):
                 pass
 
@@ -66,7 +82,8 @@ class RoutingActivity:
                   'explanation': explanation, 'configured_route': configured,
                   'model': model, 'upstream_model': None, 'fallback_reason': None,
                   'status': None, 'duration_ms': None, 'bytes_received': 0,
-                  'first_byte_ms': None, 'last_data_at': None, 'events': []}
+                  'first_byte_ms': None, 'last_data_at': None, 'response_phase': None,
+                  'reasoning_chunks': 0, 'answer_chunks': 0, 'events': []}
         self.active[record['request_id']] = record
         self.started[record['request_id']] = time.monotonic()
         self.event(record, 'rule-selected', explanation)
@@ -110,6 +127,16 @@ class RoutingActivity:
             record['first_byte_ms'] = round((now-self.started[record['request_id']])*1000)
             self.event(record, 'first-response-data', 'First response bytes received; bytes can include reasoning or keep-alives.', state='streaming')
 
+    def observed(self, record, observation):
+        if record['request_id'] not in self.active:
+            return
+        record['reasoning_chunks'] = observation.reasoning_chunks
+        record['answer_chunks'] = observation.answer_chunks
+        if observation.phase and observation.phase != record['response_phase']:
+            self.event(record, observation.phase+'-data',
+                       'Model is emitting '+observation.phase+' chunks; content is forwarded to the client without being logged.',
+                       response_phase=observation.phase)
+
     def watch(self, record, interval=10):
         async def progress():
             while record['request_id'] in self.active:
@@ -118,7 +145,7 @@ class RoutingActivity:
                     break
                 idle = round(time.monotonic()-self.last_data.get(record['request_id'], self.started[record['request_id']]))
                 self.event(record, 'still-waiting',
-                           f'Request remains active in phase {record["state"]}; {record["bytes_received"]} response bytes received, {idle}s since start or last data. Model loading/prompt processing may still be in progress.')
+                           f'Request remains active in phase {record["state"]}/{record["response_phase"] or "awaiting-data"}; {record["bytes_received"]} response bytes received, {idle}s since start or last data. Model loading/prompt processing may still be in progress.')
         self.watchers[record['request_id']] = asyncio.create_task(progress())
 
     def view(self):

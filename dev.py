@@ -92,6 +92,7 @@ def main(argv=None):
     parser.add_argument('--proxy-port', type=int, default=4000, help='Local LiteLLM port (default: 4000)')
     parser.add_argument('--env-file', type=Path, help='Override file instead of .env.local; .env is still loaded first')
     parser.add_argument('--local-model', help='Override all local aliases with an Ollama tag, e.g. llama3.2:3b')
+    parser.add_argument('--reasoning-model', help='Override only local-reasoning with an Ollama tag, e.g. qwen3:1.7b')
     parser.add_argument('--no-reload', action='store_true', help='Disable automatic router reload')
     parser.add_argument('--no-proxy', action='store_true', help='Use an existing LiteLLM at LITELLM_URL (default: localhost:4000)')
     args = parser.parse_args(argv)
@@ -106,6 +107,8 @@ def main(argv=None):
             model = args.local_model if args.local_model.startswith('ollama_chat/') else 'ollama_chat/' + args.local_model
             for name in ('LOCAL_CODE_MODEL', 'LOCAL_GENERAL_MODEL', 'LOCAL_REASONING_MODEL'):
                 env[name] = model
+        if args.reasoning_model:
+            env['LOCAL_REASONING_MODEL'] = args.reasoning_model if args.reasoning_model.startswith('ollama_chat/') else 'ollama_chat/' + args.reasoning_model
         require_free_port('127.0.0.1', args.port)
         proxy_executable = None
         if not args.no_proxy:

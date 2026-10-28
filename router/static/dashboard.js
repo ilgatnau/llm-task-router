@@ -104,6 +104,9 @@ function renderLastRoute() {
   summary.append(el('p', 'activity-current', `Rule: ${human(route.rule)}${route.rule_order ? ' · order ' + route.rule_order : ''}`), el('p', '', route.explanation || 'Explicit route selected.'));
   const meta = el('div', 'activity-meta');
   meta.append(badge('Route: ' + route.model, 'neutral'), badge('Elapsed: ' + elapsed(route.duration_ms), 'neutral'), badge('Received: ' + (route.bytes_received || 0) + ' bytes', 'neutral'));
+  if (route.response_phase) meta.append(badge('Receiving: ' + human(route.response_phase), 'purple'));
+  if (route.reasoning_chunks) meta.append(badge('Reasoning: ' + route.reasoning_chunks + ' chunks', 'neutral'));
+  if (route.answer_chunks) meta.append(badge('Answer: ' + route.answer_chunks + ' chunks', 'neutral'));
   if (route.status) meta.append(badge('HTTP ' + route.status, 'neutral'));
   summary.append(meta, el('p', '', 'Backend: ' + (route.upstream_model || 'Selecting an eligible model…')));
   if (active) summary.append(el('p', 'muted', route.bytes_received ? `Last response data ${elapsed(route.idle_ms)} ago. Bytes can include reasoning or keep-alives.` : 'No response bytes yet. The backend may be loading the model or processing the prompt; this request has not completed.'));

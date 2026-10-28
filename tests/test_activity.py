@@ -154,3 +154,28 @@ def test_local_fallback_keeps_original_rule_explanation(monkeypatch):
         assert route['fallback_reason'] == 'online-pools-unavailable-or-exhausted'
         assert any(event['event'] == 'local-fallback' for event in route['events'])
         assert 'sensitive-project' not in json.dumps(route)
+
+
+def test_reasoning_channel_is_forwarded_but_only_counts_are_logged(monkeypatch):
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv('LOCAL_ONLY', 'true')
+    reasoning = b'data: {"choices":[{"delta":{"reasoning_content":"private-reasoning-text"}}]}\n\n'
+    answer = b'data: {"choices":[{"delta":{"content":"private-answer-text"}}]}\n\n'
+    class Events(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield reasoning[:20]
+            yield reasoning[20:]
+            yield answer
+            yield b'data: [DONE]\n\n'
+    with TestClient(app) as client:
+        app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200,stream=Events())),base_url='http://litellm')
+        response = client.post('/v1/chat/completions',json={'model':'local-reasoning','messages':[],'stream':True,'reasoning_effort':'low'})
+        assert response.status_code == 200
+        assert 'private-reasoning-text' in response.text and 'private-answer-text' in response.text
+        route = client.get('/api/routing').json()['latest_completed_route']
+        assert route['reasoning_chunks'] == 1 and route['answer_chunks'] == 1
+        assert route['response_phase'] == 'answer'
+        assert any(e['event'] == 'reasoning-data' for e in route['events'])
+        assert any(e['event'] == 'answer-data' for e in route['events'])
+        assert 'private-reasoning-text' not in json.dumps(route)
+        assert 'private-answer-text' not in json.dumps(route)

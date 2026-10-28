@@ -24,7 +24,16 @@
         },
         "local-reasoning": {
           "name": "Local architecture and reasoning",
-          "tool_call": true
+          "tool_call": true,
+          "reasoning": true,
+          "variants": {
+            "thinking": {
+              "reasoningEffort": "low"
+            },
+            "direct": {
+              "reasoningEffort": "none"
+            }
+          }
         },
         "free-code": {
           "name": "Online-first implementation",
