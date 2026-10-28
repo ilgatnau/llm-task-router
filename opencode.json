@@ -25,6 +25,22 @@
         "local-reasoning": {
           "name": "Local architecture and reasoning",
           "tool_call": true
+        },
+        "free-code": {
+          "name": "Online-first implementation",
+          "tool_call": true
+        },
+        "free-architecture": {
+          "name": "Online-first architecture",
+          "tool_call": true
+        },
+        "free-cicd": {
+          "name": "Online-first CI/CD",
+          "tool_call": true
+        },
+        "free-tests": {
+          "name": "Explicit online testing (routine tests default local)",
+          "tool_call": true
         }
       }
     }

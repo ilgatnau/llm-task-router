@@ -130,9 +130,9 @@ def test_missing_key_falls_back_locally_and_quota_is_available(monkeypatch):
         app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(local), base_url='http://litellm')
         response = client.post('/v1/chat/completions', json={'model': 'free-code', 'messages': []})
         assert response.status_code == 200
-        assert response.headers['x-fallback-reason'] == 'missing-free-api-key'
+        assert response.headers['x-fallback-reason'] == 'online-pools-unavailable-or-exhausted'
         assert local_calls[0]['model'] == 'local-code'
-        quota = client.get('/quota').json()
+        quota = client.get('/quota').json()['providers']['openrouter']
         assert quota['provider_reported_daily'] is None
         assert quota['local_daily_estimate']['used'] == 0
 
@@ -158,7 +158,7 @@ def test_hosted_stream_and_local_isolation(monkeypatch):
         response = client.post('/v1/chat/completions', json={'model': 'free-tests', 'messages': [], 'stream': True})
         assert response.status_code == 200
         assert '[DONE]' in response.text
-        assert response.headers['x-upstream-model'] == pool.models['north']
+        assert response.headers['x-upstream-model'] == 'openrouter/'+pool.models['north']
         assert len(hosted) == 1
         local = []
         def local_handler(request):

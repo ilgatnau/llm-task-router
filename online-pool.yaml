@@ -1,0 +1,28 @@
+# Account must remain on the provider's FREE tier. Caps below are our safety
+# budgets, not promises of provider quota. Current eligibility reviewed 2026-10-28.
+models:
+  gemini-flash:
+    provider: gemini
+    model: gemini-3.8-flash
+    daily_safety_cap: 20
+    minute_safety_cap: 5
+  gemini-lite:
+    provider: gemini
+    model: gemini-3.5-flash-lite
+    daily_safety_cap: 20
+    minute_safety_cap: 5
+  groq-reasoning:
+    provider: groq
+    model: openai/gpt-oss-120b
+    daily_safety_cap: 50
+    minute_safety_cap: 10
+  groq-fast:
+    provider: groq
+    model: openai/gpt-oss-20b
+    daily_safety_cap: 50
+    minute_safety_cap: 10
+tasks:
+  free-code: [gemini-flash, groq-reasoning, gemini-lite, groq-fast]
+  free-architecture: [gemini-flash, groq-reasoning, gemini-lite, groq-fast]
+  free-cicd: [gemini-flash, groq-reasoning, groq-fast, gemini-lite]
+  free-tests: [gemini-lite, groq-fast, gemini-flash, groq-reasoning]

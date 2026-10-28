@@ -8,7 +8,8 @@ import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from router.free_pool import CHAT_FIELDS, Pool
+from router.free_pool import CHAT_FIELDS
+from router.online_pool import OnlinePool
 
 MODELS = ('local-code', 'local-general', 'local-reasoning', 'free-tests', 'free-architecture', 'free-code', 'free-cicd')
 CONFIG = yaml.safe_load(Path(os.getenv('RULES_PATH', 'rules.yaml')).read_text())
@@ -47,11 +48,11 @@ def select_model(payload):
 
 @asynccontextmanager
 async def lifespan(app):
-    app.state.local_only = os.getenv('LOCAL_ONLY', 'true').lower() != 'false'
+    app.state.local_only = os.getenv('LOCAL_ONLY', 'false').lower() != 'false'
     async with httpx.AsyncClient(base_url=os.getenv('LITELLM_URL', 'http://127.0.0.1:4000'), timeout=httpx.Timeout(300, connect=10)) as client:
         app.state.client = client
         async with httpx.AsyncClient(base_url='https://openrouter.ai/api/v1', timeout=httpx.Timeout(300, connect=10)) as public:
-            app.state.pool = None if app.state.local_only else Pool(public, os.getenv('OPENROUTER_API_KEY', ''), os.getenv('QUOTA_DB', ':memory:'))
+            app.state.pool = None if app.state.local_only else OnlinePool(public, os.getenv('OPENROUTER_API_KEY', ''), os.getenv('QUOTA_DB', ':memory:'))
             try:
                 yield
             finally:
@@ -86,16 +87,22 @@ async def completions(request: Request):
     if set(payload) - CHAT_FIELDS:
         raise HTTPException(400, 'Unsupported parameters; provider overrides and paid addons are disabled')
     model, rule = select_model(payload)
+    local_only_fallback = False
     if app.state.local_only and not model.startswith('local-'):
-        raise HTTPException(403, 'Hosted inference is disabled in local-only mode')
+        if payload.get('model', 'auto') != 'auto':
+            raise HTTPException(403, 'Hosted inference is disabled in local-only mode')
+        model = 'local-reasoning' if model == 'free-architecture' else 'local-code'
+        local_only_fallback = True
     headers = {'x-task-model': model, 'x-task-rule': rule}
+    if local_only_fallback:
+        headers['x-fallback-reason'] = 'local-only-mode'
     upstream = None
     if model.startswith('free-'):
         upstream, selected = await app.state.pool.send(model, payload)
         if upstream is not None:
             headers['x-upstream-model'] = selected
         else:
-            model = 'local-code'
+            model = 'local-reasoning' if model == 'free-architecture' else 'local-code'
             headers.update({'x-task-model': model, 'x-fallback-reason': selected})
     if upstream is None:
         payload['model'] = model

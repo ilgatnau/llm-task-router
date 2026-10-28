@@ -136,7 +136,7 @@ class Pool:
             for alias in self.config['tasks'][task]:
                 # Refresh for each attempt. All models share this provider-wide allowance.
                 await self.refresh_quota()
-                state = self.status()
+                state = Pool.status(self)
                 if state['conservative_remaining_daily'] <= 0:
                     return None, 'shared-daily-quota-exhausted'
                 if state['local_minute_estimate']['remaining'] <= 0 or self.shared_until > time.time():

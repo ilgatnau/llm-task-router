@@ -4,13 +4,13 @@ from fastapi.testclient import TestClient
 from router.app import app, select_model
 
 @pytest.mark.parametrize('prompt,expected', [
-    ('fix this typo', 'local-code'),
+    ('fix this typo', 'free-code'),
     ('summarize this file', 'local-general'),
-    ('review architecture', 'local-reasoning'),
-    ('implement feature for login', 'local-code'),
+    ('review architecture', 'free-architecture'),
+    ('implement feature for login', 'free-code'),
     ('/local security audit', 'local-code'),
     ('/private architecture', 'local-code'),
-    ('/code fix typo', 'local-code'),
+    ('/code fix typo', 'free-code'),
 ])
 def test_rules(prompt, expected):
     assert select_model({'messages': [{'role': 'user', 'content': prompt}]})[0] == expected
@@ -62,15 +62,19 @@ def test_upstream_error_does_not_fallback():
     ('write unit tests for login', 'local-code'),
     ('increase pytest coverage', 'local-code'),
     ('implement unit tests', 'local-code'),
-    ('implement a GitHub Actions pipeline with pytest', 'local-code'),
-    ('review deployment architecture', 'local-reasoning'),
+    ('implement a GitHub Actions pipeline with pytest', 'free-cicd'),
+    ('review deployment architecture', 'free-architecture'),
     ('/tests review architecture', 'local-code'),
-    ('/code add unit tests', 'local-code'),
-    ('/deploy architecture', 'local-code'),
-    ('/reason fix a typo', 'local-reasoning'),
+    ('/code add unit tests', 'free-code'),
+    ('/deploy architecture', 'free-cicd'),
+    ('/reason fix a typo', 'free-architecture'),
     ('/private implement a Terraform deployment', 'local-code'),
     ('/local add unit tests', 'local-code'),
-    ('implement pagination', 'local-code'),
+    ('implement pagination', 'free-code'),
+    ('write integration tests with pytest', 'free-code'),
+    ('design a test strategy with pytest', 'free-code'),
+    ('debug a deadlock in unit tests', 'free-architecture'),
+    ('/tests debug a deadlock', 'local-code'),
 ])
 def test_local_task_routes(prompt, expected):
     assert select_model({'messages': [{'role': 'user', 'content': prompt}]})[0] == expected
@@ -84,6 +88,6 @@ def test_alias_consistency():
     tasks = set(yaml.safe_load(open('free-pool.yaml'))['tasks'])
     assert set(MODELS) == aliases | tasks
     configured = json.load(open('opencode.json'))['provider']['task-router']['models']
-    assert set(configured) == aliases | {'auto'}
+    assert set(configured) == set(MODELS) | {'auto'}
     assert {r['model'] for r in CONFIG['rules']} <= set(MODELS)
     assert all(m['model_name'].startswith('local-') for m in yaml.safe_load(open('litellm.yaml'))['model_list'])

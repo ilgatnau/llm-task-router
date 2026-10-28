@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from router.app import app
 
 
-@pytest.mark.parametrize('setting', [None, 'true', 'invalid'])
+@pytest.mark.parametrize('setting', ['true', 'invalid'])
 def test_local_only_blocks_all_hosted_calls(monkeypatch, setting):
     if setting is None:
         monkeypatch.delenv('LOCAL_ONLY', raising=False)

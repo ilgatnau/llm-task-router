@@ -6,11 +6,12 @@ services:
     environment:
       LITELLM_URL: http://litellm:4000
       QUOTA_DB: /data/quota.sqlite3
-      LOCAL_ONLY: ${LOCAL_ONLY:-true}
+      LOCAL_ONLY: ${LOCAL_ONLY:-false}
     volumes:
     - ./rules.yaml:/app/rules.yaml:ro
     - ./free-pool.yaml:/app/free-pool.yaml:ro
     - quota:/data
+    - ./online-pool.yaml:/app/online-pool.yaml:ro
     depends_on:
     - litellm
     env_file: .env
