@@ -1,6 +1,7 @@
 """Free-only OpenRouter transport, persistent accounting, and bounded failover."""
 import asyncio
 import json
+import math
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -85,7 +86,7 @@ class Pool:
         for alias, model in self.models.items():
             n = self.db.execute('SELECT count(*) FROM attempts WHERE model=? AND at>=?', (model, midnight)).fetchone()[0]
             row = self.db.execute('SELECT until FROM cooldowns WHERE model=?', (model,)).fetchone()
-            models[alias] = {'id': model, 'attempts_today': n, 'cooldown_seconds': max(0, int(row[0]-now)) if row else 0,
+            models[alias] = {'id': model, 'attempts_today': n, 'cooldown_seconds': max(0, math.ceil(row[0]-now)) if row else 0,
                              'remaining_model_quota': None}
         return {'policy': 'free-only; no paid fallback', 'provider': 'openrouter',
                 'provider_reported_daily': self.remote,
@@ -94,7 +95,7 @@ class Pool:
                 'local_daily_estimate': {'limit': 50, 'used': used, 'remaining': local_remaining, 'window': 'UTC day'},
                 'local_minute_estimate': {'limit': 20, 'used': minute, 'remaining': max(0, 20-minute)},
                 'conservative_remaining_daily': remaining,
-                'shared_cooldown_seconds': max(0, int(self.shared_until-now)),
+                'shared_cooldown_seconds': max(0, math.ceil(self.shared_until-now)),
                 'models': models, 'last_event': self.last_event,
                 'scope_note': 'Local counts include failed attempts and persist in Compose. Other clients are visible only through the provider counter. Per-model remaining quotas are unknown.'}
 

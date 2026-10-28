@@ -68,6 +68,20 @@ docker compose exec ollama ollama pull qwen3:8b
 
 When switching to WSL Ollama, stop any previously started bundled instance with `docker compose --profile bundled stop ollama`. The starter container uses CPU inference; GPU configuration depends on your host. Local model size, quantization, context and concurrency determine RAM/VRAM needs. Change the three local model settings in `.env` and pull the corresponding Ollama tags (without `ollama_chat/`) to use other local models.
 
+## Local dashboard
+
+Open **http://localhost:8000/** in your browser after starting the router. This read-only dashboard is served by the gateway itself; there is no separate UI process, CDN, or hosted website.
+
+- View every routing rule in execution order, inspect its regex, and filter rules.
+- Inspect task-specific direct-provider and OpenRouter fallback order, including skipped/disabled models and the final Ollama fallback.
+- See provider configuration, local daily/minute safety budgets, reported request/token headroom, observation timestamps, and cooldowns. Missing provider quota remains **Unknown**, not unlimited.
+- Preview a task or explicit alias to see the matching rule and first eligible candidate without sending inference or reserving quota.
+- View configured local models and the most recent routing decision. Prompts and API keys are not included.
+
+Automatic refresh reads saved observations every 15 seconds and can be paused. **Refresh quota** also requests OpenRouter's account counter (bounded to eight seconds); Gemini/Groq quota observations come from normal inference response headers. Provider status means configured/eligible, not a live model or Ollama health check. Opening the dashboard, filtering rules, and previewing tasks do not call models.
+
+The same Docker image includes the UI. When updating, run `docker compose up -d --build` (add `--profile bundled` if using the bundled Ollama service). Keep port 8000 on loopback/a trusted host; the dashboard has the same local access boundary as the API. Editing rules still happens in the YAML files followed by a router restart.
+
 ## Task rules
 
 | Activity | Initial route | Local fallback / override |

@@ -7,6 +7,9 @@ services:
       LITELLM_URL: http://litellm:4000
       QUOTA_DB: /data/quota.sqlite3
       LOCAL_ONLY: ${LOCAL_ONLY:-false}
+      LOCAL_CODE_MODEL: ${LOCAL_CODE_MODEL:-ollama_chat/qwen2.5-coder:7b}
+      LOCAL_GENERAL_MODEL: ${LOCAL_GENERAL_MODEL:-ollama_chat/qwen3:8b}
+      LOCAL_REASONING_MODEL: ${LOCAL_REASONING_MODEL:-ollama_chat/qwen3:8b}
     volumes:
     - ./rules.yaml:/app/rules.yaml:ro
     - ./free-pool.yaml:/app/free-pool.yaml:ro

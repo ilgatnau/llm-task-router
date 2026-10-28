@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Task Router — Overview</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">⇄</span><span>Task Router<small>LOCAL CONTROL PLANE</small></span></a>
+    <nav aria-label="Dashboard sections">
+      <a href="#overview" class="nav-item">Overview <span>01</span></a>
+      <a href="#providers" class="nav-item">Providers &amp; quotas <span>02</span></a>
+      <a href="#routing" class="nav-item">Routing preview <span>03</span></a>
+      <a href="#rules" class="nav-item">Rules <span>04</span></a>
+    </nav>
+    <div class="sidebar-footer"><span class="status-dot"></span> Self-hosted router<p>Read-only dashboard.<br>No model calls from this page.</p></div>
+  </aside>
+  <main id="overview">
+    <header class="page-header">
+      <div><div class="eyebrow">WORKSPACE / OBSERVABILITY</div><h1>Your models. One clear view.</h1><p class="subtitle">See where tasks go and how much free capacity remains.</p></div>
+      <div class="header-actions"><span id="mode" class="badge neutral">Connecting</span><button id="refresh" class="button primary" type="button">↻ Refresh quota</button></div>
+    </header>
+    <div id="error" class="notice error" role="alert" hidden></div>
+    <div id="mode-note" class="notice" hidden></div>
+    <div class="summary-grid" aria-label="Routing summary">
+      <div class="summary"><span class="label">ONLINE PROVIDERS CONFIGURED</span><strong id="configured">—</strong><span class="muted">Eligible accounts, not a live health check</span></div>
+      <div class="summary"><span class="label">ROUTING RULES</span><strong id="rule-count">—</strong><span class="muted">Evaluated in order · first match wins</span></div>
+      <div class="summary"><span class="label">LOCAL FALLBACK</span><strong class="summary-word">Ollama <span class="badge green">WSL or Docker</span></strong><span class="muted">Routine unit tests stay local by default</span></div>
+    </div>
+    <section id="providers" aria-labelledby="provider-heading">
+      <div class="section-heading"><div><h2 id="provider-heading">Providers &amp; quotas</h2><p>Reported quota, local safety budgets, and cooldowns—kept separate.</p></div><label class="auto-refresh"><input type="checkbox" id="auto" checked> Auto-refresh · 15s</label></div>
+      <div id="provider-cards" class="provider-grid" aria-live="polite"><div class="panel loading">Loading provider observations…</div></div>
+      <p class="footnote" id="refresh-note">Automatic updates read saved observations. Manual refresh also checks OpenRouter’s account counter. No inference is sent.</p>
+      <p class="footnote" id="updated">Waiting for the router…</p>
+    </section>
+    <div class="routing-grid" id="routing">
+      <section class="panel preview-panel" aria-labelledby="preview-heading">
+        <div class="panel-heading"><div class="eyebrow">TRY A TASK</div><h2 id="preview-heading">Where would this go?</h2><p>Preview a rule match without using model quota.</p></div>
+        <form id="preview-form">
+          <label for="task">Task description</label>
+          <textarea id="task" name="task" rows="3" maxlength="10000" required placeholder="e.g. Write unit tests for the login function"></textarea>
+          <div class="examples"><button type="button" data-example="Write unit tests for the login function">Unit tests</button><button type="button" data-example="Review the service architecture">Architecture</button><button type="button" data-example="Implement pagination for the API">Implementation</button></div>
+          <label for="model">Model selection</label><select id="model"><option value="auto">Automatic routing</option></select>
+          <button type="submit" class="button primary full" id="preview-button">Preview route <span aria-hidden="true">→</span></button>
+        </form>
+        <div id="preview-result" class="preview-result" aria-live="polite"><p class="muted">Enter a task to see its matching rule and first eligible candidate.</p></div>
+      </section>
+      <section class="panel" aria-labelledby="chain-heading">
+        <div class="panel-heading"><div class="eyebrow">FAILOVER ORDER</div><h2 id="chain-heading">Online first. Local when needed.</h2><p>Unavailable or blocked candidates are skipped.</p></div>
+        <div id="pool-tabs" class="tabs" role="group" aria-label="Choose routing pool"></div>
+        <ol id="chain" class="chain"></ol>
+        <div class="panel-note">Eligible to try does not guarantee model availability. Ollama readiness is not probed here. Once streaming starts, requests are never replayed.</div>
+      </section>
+    </div>
+    <section id="rules" class="panel rules-panel" aria-labelledby="rules-heading">
+      <div class="section-heading"><div><div class="eyebrow">ROUTING POLICY</div><h2 id="rules-heading">Rules, in execution order</h2><p>Explicit model choice overrides rules. Expand a row to inspect its pattern.</p></div><label class="search-label"><span class="sr-only">Filter rules</span><input id="rule-search" type="search" placeholder="Filter rules or routes…"></label></div>
+      <div class="table-scroll"><table><thead><tr><th scope="col">Order</th><th scope="col">Rule</th><th scope="col">Destination</th><th scope="col">Behavior</th></tr></thead><tbody id="rule-rows"></tbody></table></div>
+      <div id="default-rule" class="panel-note"></div>
+    </section>
+    <section class="bottom-grid">
+      <div class="panel"><div class="panel-heading"><div class="eyebrow">LOCAL INFERENCE</div><h2>Ollama models</h2><p>No provider request quota. Speed depends on your hardware.</p></div><div id="local-models" class="local-models"></div></div>
+      <div class="panel"><div class="panel-heading"><div class="eyebrow">LATEST REQUEST</div><h2>Last routing decision</h2><p>Route metadata only. Prompts and API keys are never shown.</p></div><div id="last-route" class="last-route muted">No requests observed since this router started.</div></div>
+    </section>
+    <footer>Free-tier routing · No paid API routes <span>Local budgets are estimates, not provider entitlements.</span></footer>
+  </main>
+</body>
+</html>
