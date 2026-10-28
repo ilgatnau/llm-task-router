@@ -35,7 +35,45 @@ OpenAI gpt-oss models on Groq are open-weight models served under Groq's plan, n
 
 **Upgrading from the previous local-only version:** set `LOCAL_ONLY=false` in your existing `.env`, add the provider settings above, and rebuild. An old explicit `LOCAL_ONLY=true` remains respected. Do not overwrite existing keys/settings blindly. Without a usable online provider the router continues through local inference.
 
-## Start with Ollama running in WSL
+## Local development without Docker
+
+Requires **Python 3.12+** and Ollama running on your machine or in WSL. The UI is already bundled static HTML/CSS/JS, so Node/npm and a frontend build are not required.
+
+Run in the same WSL distro as Ollama for the simplest networking:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+# Keep existing settings; copy only missing files:
+cp -n .env.example .env
+cp -n .env.local.example .env.local
+# Put provider keys/free-tier confirmations in .env; WSL endpoint overrides in .env.local.
+ollama pull qwen2.5-coder:7b
+ollama pull qwen3:8b
+python dev.py
+```
+
+Open **http://localhost:8000/** for the dashboard. OpenCode uses the same `/v1` endpoint as the Docker setup. On native Windows use `py -3.12 -m venv .venv` and `.\.venv\Scripts\Activate.ps1` in PowerShell; specify an Ollama address reachable from Windows if Ollama is in a different WSL network context.
+
+The launcher starts LiteLLM on loopback port 4000 and the router/UI on loopback port 8000, then stops both on Ctrl+C. It does not install/download models or start Ollama for you. If an owned service fails, the other is stopped. Port conflicts fail with an explanatory message; stop Docker services first if they already publish port 8000, or select a different port.
+
+Configuration precedence is defaults → `.env` → `.env.local` → shell environment. Values are treated literally (no `${VAR}` expansion). `.env.local` is ignored by Git and Docker, so `OLLAMA_API_BASE=http://127.0.0.1:11434` can be used for development without changing Docker's `http://ollama:11434` setting. Same-distro WSL Ollama can stay bound to loopback. A launcher running outside that distro may need the reachable WSL IP, depending on networking mode.
+
+Quota state persists in the ignored `.data/quota.dev.sqlite3` file by default; it is separate from Docker's quota volume. Use the same state store rather than alternating runtimes to extend a provider allowance; the provider's limits apply regardless of runtime. Hosted inference remains online-first with the same free-tier confirmations, local test routing and private/local overrides.
+
+Python, routing YAML, and UI HTML/CSS/JS changes reload the router during development. Refresh the browser to load changed UI assets. Environment changes and LiteLLM model/proxy configuration changes require restarting `dev.py`. The UI and routing API are the same implementation in both runtimes.
+
+```sh
+python dev.py --no-reload                 # No automatic reload
+python dev.py --port 8001 --proxy-port 4001
+python dev.py --env-file /path/to/dev.env
+python dev.py --no-proxy                  # Existing LiteLLM via LITELLM_URL
+```
+
+If changing the router port, update OpenCode's provider `baseURL` accordingly. `--no-proxy` only manages the router/UI; it does not stop an external LiteLLM service. The launcher does not print provider keys. It generates an ephemeral LiteLLM master key if one is not configured and shares it with the router in child-process environments only; it is not saved to disk. An existing proxy can be authenticated with `LITELLM_API_KEY` (or `LITELLM_MASTER_KEY`) in `.env.local`.
+
+## Docker option: Ollama running in WSL
 
 Pull your local fallback models in WSL:
 
@@ -80,7 +118,7 @@ Open **http://localhost:8000/** in your browser after starting the router. This 
 
 Automatic refresh reads saved observations every 15 seconds and can be paused. **Refresh quota** also requests OpenRouter's account counter (bounded to eight seconds); Gemini/Groq quota observations come from normal inference response headers. Provider status means configured/eligible, not a live model or Ollama health check. Opening the dashboard, filtering rules, and previewing tasks do not call models.
 
-The same Docker image includes the UI. When updating, run `docker compose up -d --build` (add `--profile bundled` if using the bundled Ollama service). Keep port 8000 on loopback/a trusted host; the dashboard has the same local access boundary as the API. Editing rules still happens in the YAML files followed by a router restart.
+The same Python server serves the UI in development and Docker. For Docker updates, run `docker compose up -d --build` (add `--profile bundled` if using the bundled Ollama service). Keep port 8000 on loopback/a trusted host; the dashboard has the same local access boundary as the API. Editing rules still happens in the YAML files followed by a router restart.
 
 ## Task rules
 
@@ -116,7 +154,7 @@ watch -n 15 'curl -s http://localhost:8000/quota | python -m json.tool'
 
 Direct-provider budgets in YAML are deliberately conservative local safety caps, not promised provider quotas. Raising them does not buy quota. They do not measure every provider token constraint; provider 429 responses remain authoritative. Missing remaining quota is null/unknown, never a fabricated precise number. Dollar credit balances are not treated as request allowance.
 
-Hosted attempts, including failures, are counted before sending and persist in the `quota` Docker volume. Direct-provider observations, auth/payment blocks, and model cooldowns also persist there. Without Compose, set `QUOTA_DB` to a durable file; the default is in-memory. Run one gateway worker/instance: this is not distributed quota reservation. Other programs and keys can share account/project limits, so local counters cannot give exact account-wide headroom.
+Hosted attempts, including failures, are counted before sending and persist in the `quota` Docker volume. Direct-provider observations, auth/payment blocks, and model cooldowns also persist there. The development launcher uses `.data/quota.dev.sqlite3`; raw Uvicorn runs default to in-memory unless `QUOTA_DB` is set to a durable file. Run one gateway worker/instance: this is not distributed quota reservation. Other programs and keys can share account/project limits, so local counters cannot give exact account-wide headroom.
 
 On a model quota error, skip it until Retry-After/reset (60 seconds if absent) and try the next eligible model/provider. Auth/payment errors block that direct provider for five minutes, without buying credits or upgrading. Already exhausted local budgets are skipped. At most four direct and three OpenRouter inference attempts occur per request. Server/network errors and missing/unusable providers can also cause fallback so the user can keep working. There are no hidden inference retries. After the first successful response starts streaming, errors propagate without replay to another model, preventing duplicate text/tool actions.
 
@@ -151,7 +189,7 @@ The gateway port binds to loopback without authentication; keep it on a trusted 
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt pytest
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 ```
 

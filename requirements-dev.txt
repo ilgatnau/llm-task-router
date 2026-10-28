@@ -1,0 +1,5 @@
+-r requirements.txt
+uvicorn[standard]>=0.34,<1
+python-dotenv>=1,<2
+litellm[proxy]==1.106.5
+pytest>=8,<10

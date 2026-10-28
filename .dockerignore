@@ -8,3 +8,6 @@ tests
 pytest-of-*
 *.db
 *.sqlite3
+.env.local
+.data
+.venv-dev

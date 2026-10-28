@@ -71,7 +71,9 @@ async def lifespan(app):
     }
     app.state.online_config = yaml.safe_load(Path('online-pool.yaml').read_text())
     app.state.openrouter_config = yaml.safe_load(Path('free-pool.yaml').read_text())
-    async with httpx.AsyncClient(base_url=os.getenv('LITELLM_URL', 'http://127.0.0.1:4000'), timeout=httpx.Timeout(300, connect=10)) as client:
+    proxy_key = os.getenv('LITELLM_API_KEY') or os.getenv('LITELLM_MASTER_KEY', '')
+    proxy_headers = {'Authorization': f'Bearer {proxy_key}'} if proxy_key else {}
+    async with httpx.AsyncClient(base_url=os.getenv('LITELLM_URL', 'http://127.0.0.1:4000'), headers=proxy_headers, timeout=httpx.Timeout(300, connect=10)) as client:
         app.state.client = client
         async with httpx.AsyncClient(base_url='https://openrouter.ai/api/v1', timeout=httpx.Timeout(300, connect=10)) as public:
             app.state.pool = None if app.state.local_only else OnlinePool(public, os.getenv('OPENROUTER_API_KEY', ''), os.getenv('QUOTA_DB', ':memory:'))

@@ -7,3 +7,6 @@ pytest-of-*/
 *.sqlite3-*
 *.db
 *.db-*
+.env.local
+.data/
+.venv-dev/
