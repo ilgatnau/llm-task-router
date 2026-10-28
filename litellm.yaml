@@ -1,0 +1,16 @@
+model_list:
+- model_name: local-code
+  litellm_params:
+    model: os.environ/LOCAL_CODE_MODEL
+    api_base: os.environ/OLLAMA_API_BASE
+- model_name: local-general
+  litellm_params:
+    model: os.environ/LOCAL_GENERAL_MODEL
+    api_base: os.environ/OLLAMA_API_BASE
+- model_name: local-reasoning
+  litellm_params:
+    model: os.environ/LOCAL_REASONING_MODEL
+    api_base: os.environ/OLLAMA_API_BASE
+litellm_settings:
+  drop_params: false
+  num_retries: 0

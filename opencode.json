@@ -1,0 +1,32 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "task-router/auto",
+  "provider": {
+    "task-router": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Task Router",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "apiKey": "local-only"
+      },
+      "models": {
+        "auto": {
+          "name": "Automatic task routing",
+          "tool_call": true
+        },
+        "local-code": {
+          "name": "Local coding",
+          "tool_call": true
+        },
+        "local-general": {
+          "name": "Local general",
+          "tool_call": true
+        },
+        "local-reasoning": {
+          "name": "Local architecture and reasoning",
+          "tool_call": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+default: local-code
+# First match wins; explicit model selection overrides these rules.
+rules:
+  - name: private-local
+    pattern: '(?i)^\s*/(?:local|private)\b'
+    model: local-code
+  - name: explicit-tests
+    pattern: '(?i)^\s*/tests?\b'
+    model: local-code
+  - name: explicit-architecture
+    pattern: '(?i)^\s*/(?:architect|reason)\b'
+    model: local-reasoning
+  - name: explicit-cicd
+    pattern: '(?i)^\s*/(?:cicd|deploy)\b'
+    model: local-code
+  - name: explicit-code
+    pattern: '(?i)^\s*/code\b'
+    model: local-code
+  - name: architecture-and-hard-debugging
+    pattern: '(?i)\b(architecture|system design|design trade.?offs?|security audit|race condition|deadlock|complex debugging)\b'
+    model: local-reasoning
+  - name: pipelines-and-infrastructure
+    pattern: '(?i)\b(ci/cd|ci-cd|github actions|gitlab ci|jenkins|dockerfile|terraform|kubernetes|helm|deployment|deployments|deploy|pipeline|pipelines)\b'
+    model: local-code
+  - name: unit-and-integration-tests
+    pattern: '(?i)\b(unit tests?|unit testing|integration tests?|test coverage|pytest|jest|vitest|junit|mocking|test cases?)\b'
+    model: local-code
+  - name: implementation
+    pattern: '(?i)\b(implement|implementation|implementing|refactor|refactoring|multi-file|bug fix|fix bug|write code|add feature|production migration)\b'
+    model: local-code
+  - name: writing-and-summary
+    pattern: '(?i)\b(summarize|translate|rewrite prose|write documentation)\b'
+    model: local-general
