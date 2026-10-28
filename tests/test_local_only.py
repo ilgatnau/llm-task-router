@@ -25,7 +25,7 @@ def test_local_only_blocks_all_hosted_calls(monkeypatch, setting):
         assert {m['id'] for m in client.get('/v1/models').json()['data']} == {'auto', 'local-code', 'local-general', 'local-reasoning'}
         for alias in ('free-tests', 'free-architecture', 'free-code', 'free-cicd'):
             assert client.post('/v1/chat/completions', json={'model': alias, 'messages': []}).status_code == 403
-        for prompt, alias in [('review architecture', 'local-reasoning'), ('implement login', 'local-code'), ('write pytest tests', 'local-code'), ('build deployment pipeline', 'local-code'), ('summarize this', 'local-general')]:
+        for prompt, alias in [('review architecture', 'local-reasoning'), ('implement login', 'local-code'), ('write pytest tests', 'local-code'), ('build deployment pipeline', 'local-code'), ('summarize this', 'local-code')]:
             response = client.post('/v1/chat/completions', json={'model': 'auto', 'messages': [{'role': 'user', 'content': prompt}]})
             assert response.status_code == 200
             assert response.headers['x-task-model'] == alias

@@ -408,14 +408,18 @@ These are **per model API request**, not a whole OpenCode agent session: one pro
 
 ## Task rules
 
+OpenCode defaults to `task-router/auto`, with `task-router/free-code` for its lightweight background tasks. Gemini Flash is the preferred online model for general work, implementation, architecture/reasoning and CI/CD. Gemini Lite is next, then the configured Groq/OpenRouter candidates, then Ollama if online candidates are unavailable or exhausted. Explicit online testing starts with Gemini Lite. Routine unit tests remain local; summaries and documentation now use the online pool too. Private/local prefixes and explicit local aliases still select Ollama.
+
+Set `LOCAL_ONLY=false`, configure `GEMINI_API_KEY` and set `GEMINI_FREE_TIER_CONFIRMED=true` only after verifying the key belongs to an unbilled free-tier project. Restart the router after configuration changes. Start OpenCode with `opencode --model task-router/auto` to override a previously selected local model, or choose `task-router/auto` in `/models`. For reasoning explicitly, choose `task-router/free-architecture`; `local-reasoning` deliberately stays local. The dashboard shows the actual selected provider and any quota fallback.
+
 | Activity | Initial route | Local fallback / override |
 | --- | --- | --- |
 | Routine unit tests, mocks, test coverage | Ollama coder | `/tests` or `/local` |
 | Implementation, refactoring, ordinary bug fixes | Free online pool | Ollama coder; `/code`, `/online`, `/cloud` |
-| Architecture, design tradeoffs, hard debugging, security review | Free online pool | Ollama reasoning; `/architect`, `/reason` |
+| Architecture, reasoning, analysis, hard debugging, security review | Gemini-first online pool | Ollama reasoning; `/architect`, `/reason` |
 | CI/CD, Dockerfiles, Terraform, deployment pipelines | Free online pool | Ollama coder; `/cicd`, `/deploy` |
 | Integration/end-to-end tests, contract tests, test strategy | Free online pool | Ollama coder |
-| Summaries, translation, documentation | Ollama general | Explicit online alias if more context is needed |
+| Summaries, translation, documentation | Gemini-first online code pool | Ollama coder after online quota exhaustion |
 | Private work | Ollama coder | `/private` or `/local` |
 | Unmatched requests | Free online code pool | Ollama coder |
 

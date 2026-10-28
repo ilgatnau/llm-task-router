@@ -37,7 +37,7 @@ def test_independent_provider_switch_and_quota(monkeypatch, tmp_path):
             response, model = await pool.send('free-code', payload)
             assert response.status_code == 200 and model == 'groq/openai/gpt-oss-120b'
             await response.aclose()
-            assert [host for host, _ in calls] == ['generativelanguage.googleapis.com', 'api.groq.com']
+            assert [host for host, _ in calls] == ['generativelanguage.googleapis.com', 'generativelanguage.googleapis.com', 'api.groq.com']
             assert all(body['tools'] == payload['tools'] and 'plugins' not in body for _, body in calls)
             state = pool.status()
             assert state['providers']['gemini']['models']['gemini-flash']['cooldown_seconds'] > 0

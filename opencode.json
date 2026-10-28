@@ -11,7 +11,7 @@
       },
       "models": {
         "auto": {
-          "name": "Automatic task routing",
+          "name": "Automatic routing (Gemini first; local unit tests)",
           "tool_call": true
         },
         "local-code": {
@@ -40,7 +40,7 @@
           "tool_call": true
         },
         "free-architecture": {
-          "name": "Online-first architecture",
+          "name": "Gemini-first architecture and reasoning",
           "tool_call": true
         },
         "free-cicd": {
@@ -53,5 +53,6 @@
         }
       }
     }
-  }
+  },
+  "small_model": "task-router/free-code"
 }

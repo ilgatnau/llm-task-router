@@ -63,7 +63,8 @@ def test_preview_skips_exhausted_model(monkeypatch):
         app.state.pool.observe('gemini-flash', httpx.Response(429, headers={'retry-after': '60'}))
         data = client.post('/api/route-preview', json={'task': 'implement login'}).json()
         assert data['chain'][0]['reason'] == 'Model cooldown'
-        assert data['first_eligible']['provider'] == 'groq'
+        assert data['first_eligible']['provider'] == 'gemini'
+
 
 
 def test_local_only_dashboard_and_explicit_override(monkeypatch):

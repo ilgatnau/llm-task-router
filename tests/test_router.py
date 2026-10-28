@@ -5,7 +5,10 @@ from router.app import app, select_model
 
 @pytest.mark.parametrize('prompt,expected', [
     ('fix this typo', 'free-code'),
-    ('summarize this file', 'local-general'),
+    ('summarize this file', 'free-code'),
+    ('think through this approach', 'free-architecture'),
+    ('analyze the requirements', 'free-architecture'),
+    ('help me with reasoning about this problem', 'free-architecture'),
     ('review architecture', 'free-architecture'),
     ('implement feature for login', 'free-code'),
     ('/local security audit', 'local-code'),
