@@ -53,8 +53,7 @@ python -m pip install -r requirements-dev.txt
 cp -n .env.example .env
 cp -n .env.local.example .env.local
 # Put provider keys/free-tier confirmations in .env; WSL endpoint overrides in .env.local.
-ollama pull qwen2.5-coder:7b
-ollama pull qwen3:8b
+ollama pull llama3.2:3b
 python dev.py
 ```
 
@@ -62,7 +61,7 @@ Open **http://localhost:8000/** for the dashboard. OpenCode uses the same `/v1` 
 
 The launcher starts LiteLLM on loopback port 4000 and the router/UI on loopback port 8000, then stops both on Ctrl+C. It does not install/download models or start Ollama for you. If an owned service fails, the other is stopped. Port conflicts fail with an explanatory message; stop Docker services first if they already publish port 8000, or select a different port.
 
-Configuration precedence is defaults → `.env` → `.env.local` → shell environment. Values are treated literally (no `${VAR}` expansion). `.env.local` is ignored by Git and Docker, so `OLLAMA_API_BASE=http://127.0.0.1:11434` can be used for development without changing Docker's `http://ollama:11434` setting. Same-distro WSL Ollama can stay bound to loopback. A launcher running outside that distro may need the reachable WSL IP, depending on networking mode.
+Configuration precedence is defaults → `.env` → `.env.local` → shell environment; explicit launcher flags override their corresponding settings. Values are treated literally (no `${VAR}` expansion). `.env.local` is ignored by Git and Docker, so `OLLAMA_API_BASE=http://127.0.0.1:11434` can be used for development without changing Docker's `http://ollama:11434` setting. Same-distro WSL Ollama can stay bound to loopback. A launcher running outside that distro may need the reachable WSL IP, depending on networking mode.
 
 Quota state persists in the ignored `.data/quota.dev.sqlite3` file by default; it is separate from Docker's quota volume. Use the same state store rather than alternating runtimes to extend a provider allowance; the provider's limits apply regardless of runtime. Hosted inference remains online-first with the same free-tier confirmations, local test routing and private/local overrides.
 
@@ -70,6 +69,7 @@ Python, routing YAML, and UI HTML/CSS/JS changes reload the router during develo
 
 ```sh
 python dev.py --no-reload                 # No automatic reload
+python dev.py --local-model llama3.2:3b    # Override old local tags for this run
 python dev.py --port 8001 --proxy-port 4001
 python dev.py --env-file /path/to/dev.env
 python dev.py --no-proxy                  # Existing LiteLLM via LITELLM_URL
@@ -82,8 +82,7 @@ If changing the router port, update OpenCode's provider `baseURL` accordingly. `
 Pull your local fallback models in WSL:
 
 ```sh
-ollama pull qwen2.5-coder:7b
-ollama pull qwen3:8b
+ollama pull llama3.2:3b
 curl http://127.0.0.1:11434/api/tags
 ```
 
@@ -104,11 +103,34 @@ If you prefer bundled Ollama instead, keep `OLLAMA_API_BASE=http://ollama:11434`
 
 ```sh
 docker compose --profile bundled up -d --build
-docker compose exec ollama ollama pull qwen2.5-coder:7b
-docker compose exec ollama ollama pull qwen3:8b
+docker compose exec ollama ollama pull llama3.2:3b
 ```
 
 When switching to WSL Ollama, stop any previously started bundled instance with `docker compose --profile bundled stop ollama`. The starter container uses CPU inference; GPU configuration depends on your host. Local model size, quantization, context and concurrency determine RAM/VRAM needs. Change the three local model settings in `.env` and pull the corresponding Ollama tags (without `ollama_chat/`) to use other local models.
+
+### Small local defaults and slow-response checks
+
+All three local aliases now default to **`llama3.2:3b`**, a smaller non-thinking model for CPU/WSL development. The `local-reasoning` alias remains separately configurable, but no longer loads an 8B model by default. Online-first task rules are unchanged. Small general-purpose models may be less reliable at code generation, tool calls and long contexts than larger coding models.
+
+Existing `.env`/`.env.local` files are not overwritten by `git pull`. To switch an existing setup, set all three values in `.env.local` for development, or `.env` for Docker:
+
+```dotenv
+LOCAL_CODE_MODEL=ollama_chat/llama3.2:3b
+LOCAL_GENERAL_MODEL=ollama_chat/llama3.2:3b
+LOCAL_REASONING_MODEL=ollama_chat/llama3.2:3b
+```
+
+For development you can instead override existing tags for the current run with `python dev.py --local-model llama3.2:3b`. This changes all three local aliases without editing `.env` and leaves online-first routing unchanged.
+
+Then pull the model in WSL and check it directly before testing a large OpenCode session:
+
+```sh
+ollama pull llama3.2:3b
+ollama run llama3.2:3b "Reply with hello"
+ollama ps
+```
+
+For even lower memory use, pull `llama3.2:1b` and replace the three tags with `ollama_chat/llama3.2:1b`; expect weaker coding/tool accuracy. See [Ollama's Llama 3.2 model sizes](https://ollama.com/library/llama3.2). Restart `dev.py` after changing tags, or recreate Docker services. Long prompts, large tool schemas, CPU-only inference and model loading can still delay the first response even with a small model.
 
 ## Configure and use OpenCode
 
@@ -305,9 +327,9 @@ Each list entry references an existing entry under `models`. After direct candid
 Set the desired Ollama tags in `.env`/`.env.local`:
 
 ```dotenv
-LOCAL_CODE_MODEL=ollama_chat/qwen2.5-coder:7b
-LOCAL_GENERAL_MODEL=ollama_chat/qwen3:8b
-LOCAL_REASONING_MODEL=ollama_chat/qwen3:8b
+LOCAL_CODE_MODEL=ollama_chat/llama3.2:3b
+LOCAL_GENERAL_MODEL=ollama_chat/llama3.2:3b
+LOCAL_REASONING_MODEL=ollama_chat/llama3.2:3b
 ```
 
 Pull matching tags where Ollama runs, without the `ollama_chat/` prefix. Use an `OLLAMA_API_BASE` reachable from the LiteLLM process: native same-distro WSL usually uses `http://127.0.0.1:11434`; Docker may need a host/WSL address instead.
@@ -352,6 +374,18 @@ Open **http://localhost:8000/** in your browser after starting the router. This 
 Automatic refresh reads saved observations every 15 seconds and can be paused. **Refresh quota** also requests OpenRouter's account counter (bounded to eight seconds); Gemini/Groq quota observations come from normal inference response headers. Provider status means configured/eligible, not a live model or Ollama health check. Opening the dashboard, filtering rules, and previewing tasks do not call models.
 
 The same Python server serves the UI in development and Docker. For Docker updates, run `docker compose up -d --build` (add `--profile bundled` if using the bundled Ollama service). Keep port 8000 on loopback/a trusted host; the dashboard has the same local access boundary as the API. Editing rules still happens in the YAML files followed by a router restart.
+
+### Current rule and Python routing logs
+
+The dashboard's **Current / latest request** panel shows the active request immediately, including the first matching rule and its regex/order, why it applies, the route/model, HTTP status, elapsed time, response-byte count and time since the last data. The matching rule is highlighted in the rules table. When no request is active, the latest finished request stays visible. Concurrent requests are tracked separately, with the most recently started active request shown first.
+
+The **Request lifecycle** panel shows rule selection, online/local selection, fallback, response start, first data, periodic waiting updates and the final completed/failed/cancelled result. Activity polls every two seconds through `/api/routing`; the auto-refresh checkbox pauses it along with quota polling. These status reads do not send inference or consume model quota.
+
+The Python app emits the same routing events at INFO level in the `task_router.routing` logger. `python dev.py` shows them in the terminal; Docker users can run `docker compose logs -f router`. Every event includes a generated request ID and rule name so the lifecycle can be followed across terminal lines. Responses include the same ID as `x-route-request-id`.
+
+While waiting, a progress line is emitted every ten seconds. No bytes yet can mean LiteLLM/Ollama is still loading a model or processing context. Received bytes can include reasoning or keep-alives and do not prove that a final answer exists. HTTP 200 alone is not completion: streaming requests remain active until the stream actually ends. Stream errors, disconnections and backend timeouts are recorded as failures/cancellations without automatically replaying a partially delivered response.
+
+These are **per model API request**, not a whole OpenCode agent session: one prompt can generate several tool/model requests. Only metadata is retained—no prompts, model output, tool content, API keys or raw provider exception messages. The in-memory activity history holds the last 30 finished requests and resets on router restart/reload. Quota accounting remains in its existing persistent database. Routing logs describe what this gateway can observe; they do not inspect Ollama CPU/GPU utilization or prove the model is healthy.
 
 ## Task rules
 

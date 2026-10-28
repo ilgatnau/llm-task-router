@@ -32,6 +32,11 @@
       <div class="summary"><span class="label">ROUTING RULES</span><strong id="rule-count">—</strong><span class="muted">Evaluated in order · first match wins</span></div>
       <div class="summary"><span class="label">LOCAL FALLBACK</span><strong class="summary-word">Ollama <span class="badge green">WSL or Docker</span></strong><span class="muted">Routine unit tests stay local by default</span></div>
     </div>
+    <section class="panel activity-panel" aria-labelledby="activity-heading">
+      <div class="section-heading"><div><div class="eyebrow">LIVE ROUTING ACTIVITY</div><h2 id="activity-heading">Current / latest request</h2></div><span id="activity-status" class="badge neutral">No requests yet</span></div>
+      <div id="activity-summary" aria-live="polite">Waiting for a routed request. Previews do not create request logs.</div>
+      <p id="activity-freshness" class="footnote">Activity refreshes every 2 seconds. Each OpenCode prompt may make multiple model requests.</p>
+    </section>
     <section id="providers" aria-labelledby="provider-heading">
       <div class="section-heading"><div><h2 id="provider-heading">Providers &amp; quotas</h2><p>Reported quota, local safety budgets, and cooldowns—kept separate.</p></div><label class="auto-refresh"><input type="checkbox" id="auto" checked> Auto-refresh · 15s</label></div>
       <div id="provider-cards" class="provider-grid" aria-live="polite"><div class="panel loading">Loading provider observations…</div></div>
@@ -64,7 +69,7 @@
     </section>
     <section class="bottom-grid">
       <div class="panel"><div class="panel-heading"><div class="eyebrow">LOCAL INFERENCE</div><h2>Ollama models</h2><p>No provider request quota. Speed depends on your hardware.</p></div><div id="local-models" class="local-models"></div></div>
-      <div class="panel"><div class="panel-heading"><div class="eyebrow">LATEST REQUEST</div><h2>Last routing decision</h2><p>Route metadata only. Prompts and API keys are never shown.</p></div><div id="last-route" class="last-route muted">No requests observed since this router started.</div></div>
+      <div class="panel"><div class="panel-heading"><div class="eyebrow">ROUTING LOG</div><h2>Request lifecycle</h2><p>Rule, model selection, fallback, and progress. No prompt text or keys.</p></div><div id="last-route" class="last-route muted">No requests observed since this router started.</div></div>
     </section>
     <footer>Free-tier routing · No paid API routes <span>Local budgets are estimates, not provider entitlements.</span></footer>
   </main>

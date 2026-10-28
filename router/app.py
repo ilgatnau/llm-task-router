@@ -11,6 +11,8 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
+from router.activity import RoutingActivity, StreamObservation
 from router.dashboard import fallback_model, snapshot
 from router.chat import normalize_chat
 from router.online_pool import OnlinePool
@@ -64,10 +66,11 @@ def resolve_route(payload, local_only):
 async def lifespan(app):
     app.state.local_only = os.getenv('LOCAL_ONLY', 'false').lower() != 'false'
     app.state.last_route = None
+    app.state.activity = RoutingActivity()
     app.state.local_models = {
-        'local-code': os.getenv('LOCAL_CODE_MODEL', 'ollama_chat/qwen2.5-coder:7b'),
-        'local-general': os.getenv('LOCAL_GENERAL_MODEL', 'ollama_chat/qwen3:8b'),
-        'local-reasoning': os.getenv('LOCAL_REASONING_MODEL', 'ollama_chat/qwen3:8b'),
+        'local-code': os.getenv('LOCAL_CODE_MODEL', 'ollama_chat/llama3.2:3b'),
+        'local-general': os.getenv('LOCAL_GENERAL_MODEL', 'ollama_chat/llama3.2:3b'),
+        'local-reasoning': os.getenv('LOCAL_REASONING_MODEL', 'ollama_chat/llama3.2:3b'),
     }
     app.state.online_config = yaml.safe_load(Path('online-pool.yaml').read_text())
     app.state.openrouter_config = yaml.safe_load(Path('free-pool.yaml').read_text())
@@ -80,6 +83,8 @@ async def lifespan(app):
             try:
                 yield
             finally:
+                for route in list(app.state.activity.active.values()):
+                    app.state.activity.finish(route, 'cancelled', 'Router shutdown interrupted the request.')
                 if app.state.pool is not None:
                     app.state.pool.db.close()
 
@@ -112,41 +117,81 @@ async def completions(request: Request):
         raise HTTPException(400, 'Only function tool definitions are supported')
     payload = normalize_chat(payload)
     model, rule, local_reason = resolve_route(payload, app.state.local_only)
-    headers = {'x-task-model': model, 'x-task-rule': rule}
+    activity = app.state.activity
+    route = activity.start(model, rule, CONFIG, payload.get('model', 'auto'))
+    app.state.last_route = route
+    activity.watch(route)
+    headers = {'x-task-model': model, 'x-task-rule': rule, 'x-route-request-id': route['request_id']}
     if local_reason:
         headers['x-fallback-reason'] = local_reason
+        activity.event(route, 'local-only-override', 'Local-only mode maps the configured online route to a local model.', fallback_reason=local_reason)
     upstream = None
-    if model.startswith('free-'):
-        upstream, selected = await app.state.pool.send(model, payload)
+    try:
+        if model.startswith('free-'):
+            activity.event(route, 'online-selection', 'Selecting an eligible free online model using the configured task pool.')
+            upstream, selected = await app.state.pool.send(model, payload)
+            if upstream is not None:
+                headers['x-upstream-model'] = selected
+                activity.event(route, 'upstream-selected', 'An online candidate accepted the request.', upstream_model=selected, status=upstream.status_code)
+            else:
+                model = fallback_model(model)
+                headers.update({'x-task-model': model, 'x-fallback-reason': selected})
+                activity.event(route, 'local-fallback', 'Online candidates are unavailable, blocked, or exhausted; using the local fallback.', model=model, fallback_reason=selected)
+        if upstream is None:
+            payload['model'] = model
+            backend = 'ollama/' + app.state.local_models[model].removeprefix('ollama_chat/')
+            activity.event(route, 'local-selection', 'Sending the request through LiteLLM to the local Ollama model.', upstream_model=backend, state='waiting')
+            try:
+                upstream = await app.state.client.send(app.state.client.build_request('POST', '/v1/chat/completions', json=payload), stream=True)
+            except httpx.RequestError as exc:
+                activity.event(route, 'local-connection-error', 'LiteLLM did not provide a response: ' + type(exc).__name__, status=502)
+                raise HTTPException(502, 'Local LiteLLM unavailable', headers=headers)
+        activity.event(route, 'response-started', 'Upstream response headers received; generation has not completed yet.', status=upstream.status_code)
+        if upstream.is_error or not payload.get('stream'):
+            try:
+                body = await upstream.aread()
+            finally:
+                await upstream.aclose()
+            activity.received(route, len(body))
+            failed = upstream.is_error
+            activity.finish(route, 'failed' if failed else 'completed',
+                            'Upstream returned an HTTP error.' if failed else 'Response body received in full.', status=upstream.status_code)
+            return Response(body, status_code=upstream.status_code, media_type=upstream.headers.get('content-type', 'application/json'), headers=headers)
+    except asyncio.CancelledError:
         if upstream is not None:
-            headers['x-upstream-model'] = selected
-        else:
-            model = fallback_model(model)
-            headers.update({'x-task-model': model, 'x-fallback-reason': selected})
-    if upstream is None:
-        payload['model'] = model
-        # Local requests never enter the hosted pool, including after errors.
-        try:
-            upstream = await app.state.client.send(app.state.client.build_request('POST', '/v1/chat/completions', json=payload), stream=True)
-        except httpx.RequestError:
-            raise HTTPException(502, 'Local LiteLLM unavailable')
-    app.state.last_route = {'at': time.time(), 'model': model, 'rule': rule,
-                            'upstream_model': headers.get('x-upstream-model'),
-                            'fallback_reason': headers.get('x-fallback-reason'),
-                            'status': upstream.status_code}
-    if upstream.is_error or not payload.get('stream'):
-        try:
-            body = await upstream.aread()
-        finally:
             await upstream.aclose()
-        return Response(body, status_code=upstream.status_code, media_type=upstream.headers.get('content-type', 'application/json'), headers=headers)
+        activity.finish(route, 'cancelled', 'Request was cancelled before response delivery completed.')
+        raise
+    except Exception as exc:
+        if upstream is not None:
+            await upstream.aclose()
+        activity.finish(route, 'failed', 'Request failed before completion: ' + type(exc).__name__, status=exc.status_code if isinstance(exc, HTTPException) else 502)
+        raise
+
+    activity.event(route, 'stream-started', 'Streaming the selected model response; the request remains active until the stream ends.', state='waiting-first-data')
+
+    async def finalize():
+        await upstream.aclose()
+        activity.finish(route, 'cancelled', 'Response delivery ended before the stream completed.')
+
     async def stream():
+        observation = StreamObservation()
         try:
             async for chunk in upstream.aiter_raw():
+                activity.received(route, len(chunk))
+                observation.feed(chunk)
                 yield chunk
+            activity.finish(route, 'failed' if observation.failed else 'completed',
+                            'Upstream reported an error in the response stream.' if observation.failed else 'Upstream stream received in full.')
+        except (asyncio.CancelledError, GeneratorExit):
+            activity.finish(route, 'cancelled', 'Client disconnected or cancelled the streaming response.')
+            raise
+        except Exception as exc:
+            activity.finish(route, 'failed', 'Stream interrupted: ' + type(exc).__name__)
+            raise
         finally:
-            await upstream.aclose()
-    return StreamingResponse(stream(), status_code=upstream.status_code, media_type='text/event-stream', headers=headers)
+            await finalize()
+    return StreamingResponse(stream(), status_code=upstream.status_code, media_type='text/event-stream', headers=headers, background=BackgroundTask(finalize))
 
 
 @app.get('/quota')
@@ -168,8 +213,17 @@ async def dashboard():
 
 
 def dashboard_snapshot():
-    return snapshot(app.state.local_only, app.state.pool, CONFIG, app.state.local_models,
-                    app.state.online_config, app.state.openrouter_config, app.state.last_route)
+    activity = app.state.activity.view()
+    route = activity['current_route'] or activity['latest_completed_route']
+    data = snapshot(app.state.local_only, app.state.pool, CONFIG, app.state.local_models,
+                    app.state.online_config, app.state.openrouter_config, route)
+    data.update(activity)
+    return data
+
+
+@app.get('/api/routing')
+async def routing_activity():
+    return JSONResponse(app.state.activity.view(), headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/api/dashboard')

@@ -102,3 +102,21 @@ def test_real_port_conflict_is_detected():
         occupied.listen()
         with pytest.raises(RuntimeError, match='already in use'):
             dev.require_free_port('127.0.0.1', occupied.getsockname()[1])
+
+
+def test_local_model_flag_overrides_existing_large_models(monkeypatch):
+    class Router:
+        returncode = 0
+        def poll(self): return 0
+    captured = []
+    monkeypatch.setattr(dev, 'development_env', lambda **_: dict(dev.DEFAULTS, QUOTA_DB=':memory:', LOCAL_CODE_MODEL='ollama_chat/old:70b'))
+    monkeypatch.setattr(dev, 'require_free_port', lambda *_: None)
+    def launch(command, env):
+        captured.append(dict(env))
+        return Router()
+    monkeypatch.setattr(dev, 'launch', launch)
+    monkeypatch.setattr(dev, 'stop', lambda _: None)
+    assert dev.main(['--no-proxy', '--no-reload', '--local-model', 'llama3.2:3b']) == 0
+    for name in ('LOCAL_CODE_MODEL', 'LOCAL_GENERAL_MODEL', 'LOCAL_REASONING_MODEL'):
+        assert captured[0][name] == 'ollama_chat/llama3.2:3b'
+    assert captured[0]['LOCAL_ONLY'] == dev.DEFAULTS['LOCAL_ONLY']

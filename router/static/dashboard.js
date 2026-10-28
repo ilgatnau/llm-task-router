@@ -2,7 +2,9 @@
 const $ = id => document.getElementById(id);
 const names = {gemini: 'Google Gemini', groq: 'Groq', openrouter: 'OpenRouter', ollama: 'Ollama'};
 const poolNames = {'free-code': 'Implementation', 'free-architecture': 'Architecture', 'free-cicd': 'CI/CD', 'free-tests': 'Online tests'};
-let state = null, selectedPool = 'free-code', configSignature = '', loading = false;
+let state = null, selectedPool = 'free-code', configSignature = '', loading = false, pollingActivity = false, activitySignature = '';
+function currentRoute() {return state?.current_route || state?.latest_completed_route || state?.last_route;}
+function elapsed(ms) {return ms == null ? '—' : (ms / 1000).toFixed(1) + 's';}
 function el(tag, cls, text) { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; }
 function badge(text, cls = 'neutral') { return el('span', 'badge ' + cls, text); }
 function human(value) { return String(value || '').replace(/[-_]/g, ' '); }
@@ -64,7 +66,7 @@ function renderRules() {
   const filter = $('rule-search').value.toLowerCase(); const rows = $('rule-rows'); rows.replaceChildren();
   state.rules.rules.forEach((rule, index) => {
     if (![rule.name, rule.pattern, rule.model].some(s => s.toLowerCase().includes(filter))) return;
-    const row = el('tr'); row.append(el('td', '', String(index + 1).padStart(2, '0')));
+    const row = el('tr', currentRoute()?.rule === rule.name ? 'rule-highlight' : ''); row.append(el('td', '', String(index + 1).padStart(2, '0')));
     const name = el('td'), details = el('details'); details.append(el('summary', '', human(rule.name)), el('pre', '', rule.pattern)); name.append(details);
     const target = el('td'); target.append(el('code', '', rule.model));
     const behavior = el('td'); const online = rule.model.startsWith('free-');
@@ -89,10 +91,44 @@ function renderConfig() {
   renderRules();
 }
 function renderLastRoute() {
-  const box = $('last-route'); box.replaceChildren(); const route = state.last_route;
-  if (!route) {box.textContent = 'No requests observed since this router started.'; return;}
-  [['Matched rule', route.rule], ['Destination', route.upstream_model || route.model], ['Status', route.status], ['Fallback', route.fallback_reason || 'None'], ['Observed', timestamp(route.at)]].forEach(([label, value]) => {const row = el('p'); row.append(el('strong', '', label), document.createTextNode(String(value))); box.append(row);});
+  const route = currentRoute(), box = $('last-route'), summary = $('activity-summary'); box.replaceChildren(); summary.replaceChildren();
+  if (!route) {
+    summary.append(el('p', 'activity-empty', 'Waiting for a routed request. Previews do not create request logs.'));
+    box.textContent = 'No requests observed since this router started.';
+    $('activity-status').textContent = 'No requests yet'; $('activity-status').className = 'badge neutral';
+    return;
+  }
+  const active = Boolean(state.current_route);
+  $('activity-status').textContent = active ? 'Active · ' + human(route.state) : 'Latest · ' + human(route.state);
+  $('activity-status').className = 'badge ' + (active ? 'purple' : route.state === 'completed' ? 'green' : 'amber');
+  summary.append(el('p', 'activity-current', `Rule: ${human(route.rule)}${route.rule_order ? ' · order ' + route.rule_order : ''}`), el('p', '', route.explanation || 'Explicit route selected.'));
+  const meta = el('div', 'activity-meta');
+  meta.append(badge('Route: ' + route.model, 'neutral'), badge('Elapsed: ' + elapsed(route.duration_ms), 'neutral'), badge('Received: ' + (route.bytes_received || 0) + ' bytes', 'neutral'));
+  if (route.status) meta.append(badge('HTTP ' + route.status, 'neutral'));
+  summary.append(meta, el('p', '', 'Backend: ' + (route.upstream_model || 'Selecting an eligible model…')));
+  if (active) summary.append(el('p', 'muted', route.bytes_received ? `Last response data ${elapsed(route.idle_ms)} ago. Bytes can include reasoning or keep-alives.` : 'No response bytes yet. The backend may be loading the model or processing the prompt; this request has not completed.'));
+  if (state.active_routes?.length > 1) summary.append(el('p', 'muted', `${state.active_routes.length} concurrent requests are active. Showing the most recently started one.`));
+  if (route.fallback_reason) summary.append(el('p', '', 'Fallback: ' + human(route.fallback_reason)));
+  summary.append(el('p', 'muted', `Request ${route.request_id} · Started ${timestamp(route.started_at)}${route.completed_at ? ' · Finished ' + timestamp(route.completed_at) : ''}`));
+  if (route.pattern) {const details = el('details'); details.append(el('summary', 'muted', 'Matched rule pattern'), el('pre', '', route.pattern)); summary.append(details);}
+  const events = el('ol', 'event-list');
+  (route.events || []).slice(-12).forEach(event => {const row = el('li'); row.append(el('time', '', timestamp(event.at) + ' · +' + elapsed(event.elapsed_ms)), el('strong', '', human(event.event)), el('p', '', event.message)); if (event.upstream_model) row.append(el('code', '', event.upstream_model)); events.append(row);});
+  box.append(events);
+  const signature = route.rule + ':' + active;
+  if (activitySignature !== signature) {activitySignature = signature; renderRules();}
 }
+async function pollActivity() {
+  if (pollingActivity || !state || !$('auto').checked || document.hidden) return;
+  pollingActivity = true;
+  try {
+    const response = await fetch('/api/routing', {cache:'no-store', signal:AbortSignal.timeout(5000)});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    Object.assign(state, await response.json()); renderLastRoute();
+    $('activity-freshness').textContent = 'Activity updated ' + timestamp(state.activity_observed_at) + '. Refreshes every 2 seconds; each OpenCode prompt may make multiple model requests.';
+  } catch(error) {$('activity-freshness').textContent = 'Activity refresh unavailable; showing the last observation. ' + error.message;}
+  finally {pollingActivity = false;}
+}
+
 async function load(refresh = false) {
   if (loading) return;
   loading = true; $('refresh').disabled = true;
@@ -130,3 +166,5 @@ $('preview-form').addEventListener('submit', async event => {
 });
 load();
 setInterval(() => {if ($('auto').checked && !document.hidden) load();}, 15000);
+
+setInterval(pollActivity, 2000);
