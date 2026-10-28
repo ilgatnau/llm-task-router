@@ -11,10 +11,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-# Reject addons and provider overrides rather than trusting arbitrary request extras.
-CHAT_FIELDS = {'model', 'messages', 'tools', 'tool_choice', 'parallel_tool_calls',
-               'stream', 'max_tokens', 'temperature', 'top_p', 'stop', 'seed',
-               'presence_penalty', 'frequency_penalty', 'response_format'}
+from router.chat import CHAT_FIELDS
 
 
 def free_entry(entry):

@@ -325,8 +325,11 @@ Finally, open **http://localhost:8000/**, inspect the rule/pool order, and previ
 
 ### Troubleshooting
 
+The gateway accepts standard OpenAI-compatible streaming options (`stream_options.include_usage`), reasoning effort, and either token-limit field (`max_completion_tokens` is normalized to `max_tokens`). Client bookkeeping fields such as `user`, `metadata`, `store: false`, and `verbosity` are accepted but not forwarded. Server-side storage, paid addons, and provider overrides remain disabled. Rejection errors name unsupported field names without returning their values.
+
 | Symptom | Check |
 | --- | --- |
+| First prompt returns `Unsupported parameters` | Pull the compatibility fix and restart `dev.py` (or rebuild Docker). If it persists, report only the names in `unsupported_parameters`, not request bodies or keys |
 | Task Router missing in OpenCode | Run from the configured project or set `OPENCODE_CONFIG`; preserve all model entries; check project config overrides and OpenCode version |
 | Connection refused | Start `dev.py`/Docker; check `/health` and the gateway port in `baseURL` |
 | Every online task falls back locally | Check `.env` keys, free-tier confirmation flags, `LOCAL_ONLY`, safety budgets, and provider cooldowns in the dashboard |

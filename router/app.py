@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from router.dashboard import fallback_model, snapshot
-from router.free_pool import CHAT_FIELDS
+from router.chat import normalize_chat
 from router.online_pool import OnlinePool
 
 MODELS = ('local-code', 'local-general', 'local-reasoning', 'free-tests', 'free-architecture', 'free-code', 'free-cicd')
@@ -110,8 +110,7 @@ async def completions(request: Request):
         raise HTTPException(400, 'messages must be an array of objects')
     if 'tools' in payload and (not isinstance(payload['tools'], list) or any(not isinstance(t, dict) or t.get('type') != 'function' for t in payload['tools'])):
         raise HTTPException(400, 'Only function tool definitions are supported')
-    if set(payload) - CHAT_FIELDS:
-        raise HTTPException(400, 'Unsupported parameters; provider overrides and paid addons are disabled')
+    payload = normalize_chat(payload)
     model, rule, local_reason = resolve_route(payload, app.state.local_only)
     headers = {'x-task-model': model, 'x-task-rule': rule}
     if local_reason:
