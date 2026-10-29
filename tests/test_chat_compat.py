@@ -69,3 +69,25 @@ def test_invalid_or_unsafe_client_options_rejected(extra):
     with TestClient(app) as client:
         response = client.post('/v1/chat/completions', json={'model': 'auto', 'messages': [], **extra})
         assert response.status_code == 400
+
+
+def test_groq_history_normalization_preserves_tools_and_original_payload():
+    from copy import deepcopy
+    from router.chat import groq_chat
+    payload = {'model': 'auto', 'messages': [
+        {'role': 'developer', 'content': 'Follow these instructions'},
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'first'}, {'type': 'text', 'text': 'second'}], 'name': 'client'},
+        {'role': 'assistant', 'content': None, 'reasoning_content': 'private reasoning',
+         'tool_calls': [{'id': 'call_123', 'type': 'function', 'function': {'name': 'read_file', 'arguments': '{"path":"file.py"}'},
+                         'extra_content': {'google': {'thought_signature': 'provider-only'}}}]},
+        {'role': 'tool', 'tool_call_id': 'call_123', 'content': 'file contents'},
+    ]}
+    original = deepcopy(payload)
+    normalized = groq_chat(payload)
+    assert normalized['messages'][0] == {'role': 'system', 'content': 'Follow these instructions'}
+    assert normalized['messages'][1] == {'role': 'user', 'content': 'first\nsecond'}
+    assistant = normalized['messages'][2]
+    assert assistant['content'] is None and 'reasoning_content' not in assistant
+    assert assistant['tool_calls'][0] == {'id': 'call_123', 'type': 'function', 'function': {'name': 'read_file', 'arguments': '{"path":"file.py"}'}}
+    assert normalized['messages'][3] == original['messages'][3]
+    assert payload == original

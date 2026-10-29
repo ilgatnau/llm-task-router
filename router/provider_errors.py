@@ -29,10 +29,22 @@ async def rejected_request_summary(response):
         code = error.get('code')
         code = code if isinstance(code, str) and code in codes else 'request-rejected'
         text = error.get('message', '')
-        fields = ('reasoning_effort', 'max_tokens', 'max_completion_tokens', 'temperature',
+        fields = ('content', 'role', 'reasoning_content', 'extra_content', 'tool_calls', 'tool_call_id', 'name', 'reasoning_effort', 'max_tokens', 'max_completion_tokens', 'temperature',
                   'tool_choice', 'tools', 'messages', 'stream_options', 'response_format',
                   'frequency_penalty', 'presence_penalty', 'parallel_tool_calls')
         mentioned = [field for field in fields if isinstance(text, str) and re.search(r'\b'+field+r'\b', text)]
-        return code + ('; referenced fields: ' + ', '.join(mentioned) if mentioned else '; details redacted')
+        # Extract only numeric indexes and reviewed schema tokens from field paths.
+        paths = []
+        if isinstance(text, str):
+            for match in re.finditer(r"\bmessages(?:\[([0-9]{1,6})\]|\.([0-9]{1,6}))(?:\.(content|role|reasoning_content|extra_content|tool_calls|tool_call_id|name)\b)?", text):
+                path = 'messages[' + (match[1] or match[2]) + ']'
+                if match[3]:
+                    path += '.' + match[3]
+                if path not in paths:
+                    paths.append(path)
+        result = code + ('; referenced fields: ' + ', '.join(mentioned) if mentioned else '; details redacted')
+        if paths:
+            result += '; field paths: ' + ', '.join(paths[:8])
+        return result
     except (TimeoutError, httpx.HTTPError, ValueError, TypeError):
         return 'Provider rejected the request; error details unavailable.'

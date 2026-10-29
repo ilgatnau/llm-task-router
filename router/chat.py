@@ -39,3 +39,33 @@ def normalize_chat(payload):
     for field in ('user', 'metadata', 'store', 'verbosity'):
         result.pop(field, None)
     return result
+
+
+def groq_chat(payload):
+    """Translate shared chat history to Groq's text/function-tool message schema.
+
+    Other providers' reasoning and thought signatures are history metadata, not
+    portable request fields. Do not send them to Groq, and do not change the
+    original payload: Gemini/local fallback may still need that metadata.
+    """
+    body = dict(payload)
+    messages = []
+    for original in payload['messages']:
+        message = {key: original[key] for key in ('role', 'content', 'tool_calls', 'tool_call_id') if key in original}
+        if message.get('role') == 'developer':
+            message['role'] = 'system'
+        content = message.get('content')
+        if isinstance(content, list) and all(isinstance(part, dict) and part.get('type') == 'text' and isinstance(part.get('text'), str) for part in content):
+            message['content'] = '\n'.join(part['text'] for part in content)
+        if isinstance(message.get('tool_calls'), list):
+            message['tool_calls'] = [{key: call[key] for key in ('id', 'type', 'function') if key in call}
+                                     if isinstance(call, dict) else call for call in message['tool_calls']]
+        messages.append(message)
+    body['messages'] = messages
+    # Groq gpt-oss supports low/medium/high. "none" cannot disable its reasoning;
+    # omit it to use the provider default rather than send an unsupported value.
+    if body.get('reasoning_effort') in ('none', 'minimal', 'xhigh'):
+        effort = body.pop('reasoning_effort')
+        if effort != 'none':
+            body['reasoning_effort'] = 'low' if effort == 'minimal' else 'high'
+    return body

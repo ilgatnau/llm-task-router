@@ -15,6 +15,7 @@ import yaml
 
 from router.free_pool import CHAT_FIELDS, Pool
 from router.provider_errors import rejected_request_summary
+from router.chat import groq_chat
 
 # Reviewed against official pricing/free-plan docs on 2026-10-28.
 # Account-tier checks are not available through these inference APIs.
@@ -162,10 +163,11 @@ class OnlinePool(Pool):
                     continue
                 self.report_candidate(on_event, provider, entry['model'], 'attempting')
                 body = dict(payload, model=entry['model'])
-                if provider == 'groq' and body.get('reasoning_effort') in ('none', 'minimal', 'xhigh'):
-                    effort = body.pop('reasoning_effort')
-                    if effort != 'none':
-                        body['reasoning_effort'] = 'low' if effort == 'minimal' else 'high'
+                if provider == 'groq':
+                    normalized = groq_chat(body)
+                    if on_event and normalized != body:
+                        on_event('provider-compatibility', 'Normalized Groq message metadata, text parts or reasoning options; prompt and tool data preserved.')
+                    body = normalized
                 with self.db:
                     row = self.db.execute('INSERT INTO direct_attempts VALUES (?,?,NULL)', (time.time(), alias)).lastrowid
             try:

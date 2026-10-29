@@ -365,3 +365,43 @@ def test_provider_error_summary_redacts_arbitrary_text(monkeypatch):
         assert summary == 'tool_use_failed; referenced fields: reasoning_effort'
         assert 'Secret' not in summary and 'abc123' not in summary
     asyncio.run(scenario())
+
+
+def test_groq_normalized_history_and_gemini_fallback_keep_distinct_metadata(monkeypatch):
+    enable(monkeypatch)
+    async def scenario():
+        messages = [
+            {'role': 'user', 'content': 'continue'},
+            {'role': 'assistant', 'content': 'previous answer', 'reasoning_content': 'private reasoning'},
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'next task'}]},
+        ]
+        calls = []
+        def handler(request):
+            body = json.loads(request.content)
+            calls.append(request.url.host)
+            if request.url.host == 'api.groq.com':
+                assert 'reasoning_content' not in body['messages'][1]
+                assert body['messages'][2]['content'] == 'next task'
+                return httpx.Response(429)
+            assert body['messages'] == messages
+            return httpx.Response(200, json={'choices': []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            pool = OnlinePool(client, '')
+            response, model = await pool.send('free-code', {'messages': messages})
+            assert model.startswith('gemini/')
+            assert calls == ['api.groq.com', 'api.groq.com', 'generativelanguage.googleapis.com']
+            await response.aclose()
+            pool.db.close()
+    asyncio.run(scenario())
+
+
+def test_message_error_paths_are_specific_and_redacted():
+    async def scenario():
+        from router.provider_errors import rejected_request_summary
+        response = httpx.Response(400, json={'error': {'message':
+            "'messages.2.reasoning_content': unsupported field; secret-prompt; messages[4].tool_calls private data"}})
+        summary = await rejected_request_summary(response)
+        assert 'messages[2].reasoning_content' in summary
+        assert 'messages[4].tool_calls' in summary
+        assert 'secret-prompt' not in summary and 'private data' not in summary
+    asyncio.run(scenario())
