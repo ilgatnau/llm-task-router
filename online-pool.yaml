@@ -22,7 +22,7 @@ models:
     daily_safety_cap: 50
     minute_safety_cap: 10
 tasks:
-  free-code: [gemini-flash, gemini-lite, groq-reasoning, groq-fast]
-  free-architecture: [gemini-flash, gemini-lite, groq-reasoning, groq-fast]
-  free-cicd: [gemini-flash, gemini-lite, groq-reasoning, groq-fast]
-  free-tests: [gemini-lite, gemini-flash, groq-fast, groq-reasoning]
+  free-code: [groq-reasoning, groq-fast, gemini-flash, gemini-lite]
+  free-architecture: [groq-reasoning, groq-fast, gemini-flash, gemini-lite]
+  free-cicd: [groq-reasoning, groq-fast, gemini-flash, gemini-lite]
+  free-tests: [groq-fast, groq-reasoning, gemini-lite, gemini-flash]

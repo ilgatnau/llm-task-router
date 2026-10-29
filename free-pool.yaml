@@ -1,10 +1,11 @@
 # Exact, free-only IDs. Candidate order depends on the task.
 models:
+  xing: xingchen-agi/xing4.0-29b-a4b:free
   north: cohere/north-mini-code:free
   inkling: thinkingmachines/inkling-small:free
   nemotron: nvidia/nemotron-3-ultra-550b-a55b:free
 tasks:
-  free-tests: [north, inkling, nemotron]
-  free-cicd: [north, inkling, nemotron]
-  free-code: [inkling, north, nemotron]
-  free-architecture: [nemotron, inkling, north]
+  free-tests: [north, inkling, xing, nemotron]
+  free-cicd: [north, xing, inkling, nemotron]
+  free-code: [inkling, xing, north, nemotron]
+  free-architecture: [xing, nemotron, inkling, north]

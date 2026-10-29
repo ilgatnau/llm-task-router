@@ -75,7 +75,7 @@ def test_stopping_conditions(mode):
             pool = Pool(client, 'secret')
             response, reason = await pool.send('free-code', {'messages': []})
             assert response is None
-            assert len(calls) == {'daily': 0, 'platform': 1, 'pricing': 0, 'catalog-error': 0, 'auth': 1, 'all-models': 3}[mode]
+            assert len(calls) == {'daily': 0, 'platform': 1, 'pricing': 0, 'catalog-error': 0, 'auth': 1, 'all-models': 4}[mode]
             pool.db.close()
     run(scenario())
 
@@ -191,3 +191,34 @@ def test_no_replay_after_stream_started(monkeypatch):
         with pytest.raises(httpx.ReadError):
             client.post('/v1/chat/completions', json={'model': 'free-code', 'messages': [], 'stream': True})
         assert len(calls) == 1
+
+
+@pytest.mark.parametrize('availability', ['free', 'paid', 'missing', 'no-tools'])
+def test_chinese_reasoning_candidate_is_verified_before_use(availability):
+    async def scenario():
+        pool = None
+        attempts = []
+        def handler(request):
+            if request.url.path.endswith('/models'):
+                catalog = [entry(m) for alias, m in pool.models.items() if alias != 'xing']
+                if availability != 'missing':
+                    chinese = entry(pool.models['xing'], '0.01' if availability == 'paid' else '0')
+                    if availability == 'no-tools':
+                        chinese['supported_parameters'] = []
+                    catalog.append(chinese)
+                return httpx.Response(200, json={'data': catalog})
+            if request.url.path.endswith('/key'):
+                return httpx.Response(200, json={'data': {}})
+            attempts.append(json.loads(request.content))
+            return httpx.Response(200, json={'choices': []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url='https://openrouter.ai/api/v1') as client:
+            pool = Pool(client, 'test-key')
+            response, model = await pool.send('free-architecture', {'messages': []})
+            assert response.status_code == 200
+            assert model == pool.models['xing' if availability == 'free' else 'nemotron']
+            assert len(attempts) == 1
+            assert attempts[0]['provider']['max_price'] == {'prompt': 0, 'completion': 0}
+            assert pool.status()['local_daily_estimate']['used'] == 1
+            await response.aclose()
+            pool.db.close()
+    run(scenario())

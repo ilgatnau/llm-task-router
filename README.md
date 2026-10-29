@@ -12,7 +12,7 @@ OpenCode → self-hosted task router
                     → LiteLLM → Ollama
 ```
 
-Candidate order is task-specific: see `online-pool.yaml`. For coding/architecture, the initial order is Gemini 3.8 Flash → Groq gpt-oss-120b → Gemini 3.5 Flash-Lite → Groq gpt-oss-20b → OpenRouter's task-specific free pool → Ollama. Missing keys and unconfirmed free-tier accounts are skipped. Model assignments are starting preferences, not benchmark claims that online inference always beats your local hardware.
+Candidate order is task-specific: see `online-pool.yaml`. For coding/architecture, the initial order is Groq gpt-oss-120b → Groq gpt-oss-20b → Gemini 3.8 Flash → Gemini 3.5 Flash-Lite → OpenRouter's task-specific free pool → Ollama. Missing keys and unconfirmed free-tier accounts are skipped. Model assignments are starting preferences, not benchmark claims that online inference always beats your local hardware.
 
 **Setup:** [Free providers](#configure-free-online-providers) · [Local development](#local-development-without-docker) · [Docker + WSL](#docker-option-ollama-running-in-wsl)
 
@@ -408,18 +408,20 @@ These are **per model API request**, not a whole OpenCode agent session: one pro
 
 ## Task rules
 
-OpenCode defaults to `task-router/auto`, with `task-router/free-code` for its lightweight background tasks. Gemini Flash is the preferred online model for general work, implementation, architecture/reasoning and CI/CD. Gemini Lite is next, then the configured Groq/OpenRouter candidates, then Ollama if online candidates are unavailable or exhausted. Explicit online testing starts with Gemini Lite. Routine unit tests remain local; summaries and documentation now use the online pool too. Private/local prefixes and explicit local aliases still select Ollama.
+The optional OpenRouter pool now includes **Xing4.0 (China Telecom TeleAI)** through the exact `xingchen-agi/xing4.0-29b-a4b:free` endpoint. It is preferred within the OpenRouter architecture/reasoning pool, after the direct Gemini/Groq candidates. Qwen and DeepSeek had no free endpoints in the reviewed live catalog and are not configured. See [Chinese model setup and quota limits](HOSTED.md#chinese-model-fallback).
 
-Set `LOCAL_ONLY=false`, configure `GEMINI_API_KEY` and set `GEMINI_FREE_TIER_CONFIRMED=true` only after verifying the key belongs to an unbilled free-tier project. Restart the router after configuration changes. Start OpenCode with `opencode --model task-router/auto` to override a previously selected local model, or choose `task-router/auto` in `/models`. For reasoning explicitly, choose `task-router/free-architecture`; `local-reasoning` deliberately stays local. The dashboard shows the actual selected provider and any quota fallback.
+OpenCode defaults to `task-router/auto`, with `task-router/free-code` for its lightweight background tasks. Groq gpt-oss-120b is the preferred online model for general work, implementation, architecture/reasoning and CI/CD. Groq gpt-oss-20b is next, then Gemini Flash/Lite and the configured OpenRouter candidates, then Ollama if online candidates are unavailable or exhausted. Explicit online testing starts with Groq gpt-oss-20b. Routine unit tests remain local; summaries and documentation now use the online pool too. Private/local prefixes and explicit local aliases still select Ollama.
+
+Set `LOCAL_ONLY=false`, configure `GROQ_API_KEY` and set `GROQ_FREE_TIER_CONFIRMED=true` only after verifying your Groq account is on the free plan. Optional Gemini fallback requires `GEMINI_API_KEY` and `GEMINI_FREE_TIER_CONFIRMED=true` after verifying the key belongs to an unbilled free-tier project. Restart the router after configuration changes. Start OpenCode with `opencode --model task-router/auto` to override a previously selected local model, or choose `task-router/auto` in `/models`. For reasoning explicitly, choose `task-router/free-architecture`; `local-reasoning` deliberately stays local. The dashboard shows the actual selected provider and any quota fallback.
 
 | Activity | Initial route | Local fallback / override |
 | --- | --- | --- |
 | Routine unit tests, mocks, test coverage | Ollama coder | `/tests` or `/local` |
 | Implementation, refactoring, ordinary bug fixes | Free online pool | Ollama coder; `/code`, `/online`, `/cloud` |
-| Architecture, reasoning, analysis, hard debugging, security review | Gemini-first online pool | Ollama reasoning; `/architect`, `/reason` |
+| Architecture, reasoning, analysis, hard debugging, security review | Groq-first online pool | Ollama reasoning; `/architect`, `/reason` |
 | CI/CD, Dockerfiles, Terraform, deployment pipelines | Free online pool | Ollama coder; `/cicd`, `/deploy` |
 | Integration/end-to-end tests, contract tests, test strategy | Free online pool | Ollama coder |
-| Summaries, translation, documentation | Gemini-first online code pool | Ollama coder after online quota exhaustion |
+| Summaries, translation, documentation | Groq-first online code pool | Ollama coder after online quota exhaustion |
 | Private work | Ollama coder | `/private` or `/local` |
 | Unmatched requests | Free online code pool | Ollama coder |
 
@@ -446,7 +448,7 @@ Direct-provider budgets in YAML are deliberately conservative local safety caps,
 
 Hosted attempts, including failures, are counted before sending and persist in the `quota` Docker volume. Direct-provider observations, auth/payment blocks, and model cooldowns also persist there. The development launcher uses `.data/quota.dev.sqlite3`; raw Uvicorn runs default to in-memory unless `QUOTA_DB` is set to a durable file. Run one gateway worker/instance: this is not distributed quota reservation. Other programs and keys can share account/project limits, so local counters cannot give exact account-wide headroom.
 
-On a model quota error, skip it until Retry-After/reset (60 seconds if absent) and try the next eligible model/provider. Auth/payment errors block that direct provider for five minutes, without buying credits or upgrading. Already exhausted local budgets are skipped. At most four direct and three OpenRouter inference attempts occur per request. Server/network errors and missing/unusable providers can also cause fallback so the user can keep working. There are no hidden inference retries. After the first successful response starts streaming, errors propagate without replay to another model, preventing duplicate text/tool actions.
+On a model quota error, skip it until Retry-After/reset (60 seconds if absent) and try the next eligible model/provider. Auth/payment errors block that direct provider for five minutes, without buying credits or upgrading. Already exhausted local budgets are skipped. At most four direct and four OpenRouter inference attempts occur per request. Server/network errors and missing/unusable providers can also cause fallback so the user can keep working. There are no hidden inference retries. After the first successful response starts streaming, errors propagate without replay to another model, preventing duplicate text/tool actions.
 
 Safety controls reject provider overrides, arbitrary addons/plugins, server-side builtin tools and hosted media processing. Only client-defined function tools and approved chat fields are forwarded. OpenRouter additionally requires a fresh zero-price catalog entry (at most 60 seconds old), a `:free` suffix, tools support, and zero-price provider filters. All local requests stay local; local failures are never escalated to online models.
 

@@ -26,7 +26,8 @@ def test_dashboard_assets_and_snapshot_do_not_send_inference(monkeypatch):
         assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
         data = response.json()
         assert data['rules'] == CONFIG
-        assert len(data['chains']['free-code']) == 8
+        assert len(data['chains']['free-code']) == 9
+        assert any(candidate['model'] == 'xingchen-agi/xing4.0-29b-a4b:free' for candidate in data['chains']['free-code'])
         assert data['chains']['free-code'][-1]['provider'] == 'ollama'
         assert data['providers']['gemini']['enabled'] is True
         assert data['providers']['gemini']['models']['gemini-flash']['provider_reported_remaining_requests'] is None
@@ -60,10 +61,10 @@ def test_preview_skips_exhausted_model(monkeypatch):
     monkeypatch.setenv('GROQ_API_KEY', 'test-key')
     monkeypatch.setenv('GROQ_FREE_TIER_CONFIRMED', 'true')
     with TestClient(app) as client:
-        app.state.pool.observe('gemini-flash', httpx.Response(429, headers={'retry-after': '60'}))
+        app.state.pool.observe('groq-reasoning', httpx.Response(429, headers={'retry-after': '60'}))
         data = client.post('/api/route-preview', json={'task': 'implement login'}).json()
         assert data['chain'][0]['reason'] == 'Model cooldown'
-        assert data['first_eligible']['provider'] == 'gemini'
+        assert data['first_eligible']['provider'] == 'groq'
 
 
 

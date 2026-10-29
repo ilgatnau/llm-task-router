@@ -23,9 +23,9 @@ def test_independent_provider_switch_and_quota(monkeypatch, tmp_path):
         def handler(request):
             body = json.loads(request.content)
             calls.append((request.url.host, body))
-            if request.url.host == 'generativelanguage.googleapis.com':
+            if request.url.host == 'api.groq.com':
                 return httpx.Response(429, headers={'retry-after': '120'})
-            assert request.url.host == 'api.groq.com'
+            assert request.url.host == 'generativelanguage.googleapis.com'
             return httpx.Response(200, json={'choices': []}, headers={
                 'x-ratelimit-limit-requests': '1000', 'x-ratelimit-remaining-requests': '999',
                 'x-ratelimit-limit-tokens': '8000', 'x-ratelimit-remaining-tokens': '7000',
@@ -35,20 +35,20 @@ def test_independent_provider_switch_and_quota(monkeypatch, tmp_path):
             pool = OnlinePool(client, '', db)
             payload = {'model': 'free-code', 'messages': [{'role': 'user', 'content': 'implement login'}], 'tools': [{'type': 'function', 'function': {'name': 'read_file'}}]}
             response, model = await pool.send('free-code', payload)
-            assert response.status_code == 200 and model == 'groq/openai/gpt-oss-120b'
+            assert response.status_code == 200 and model == 'gemini/gemini-3.8-flash'
             await response.aclose()
-            assert [host for host, _ in calls] == ['generativelanguage.googleapis.com', 'generativelanguage.googleapis.com', 'api.groq.com']
+            assert [host for host, _ in calls] == ['api.groq.com', 'api.groq.com', 'generativelanguage.googleapis.com']
             assert all(body['tools'] == payload['tools'] and 'plugins' not in body for _, body in calls)
             state = pool.status()
-            assert state['providers']['gemini']['models']['gemini-flash']['cooldown_seconds'] > 0
-            groq = state['providers']['groq']['models']['groq-reasoning']
-            assert groq['provider_reported_remaining_requests'] == '999'
-            assert groq['local_daily_estimate']['used'] == 1
+            assert state['providers']['groq']['models']['groq-reasoning']['cooldown_seconds'] > 0
+            selected = state['providers']['gemini']['models']['gemini-flash']
+            assert selected['provider_reported_remaining_requests'] == '999'
+            assert selected['local_daily_estimate']['used'] == 1
             assert state['providers']['openrouter']['local_daily_estimate']['used'] == 0  # independent of OpenRouter allowance
             pool.db.close()
             restarted = OnlinePool(client, '', db)
             assert restarted.direct_status()['groq']['models']['groq-reasoning']['local_daily_estimate']['used'] == 1
-            assert restarted.direct_status()['gemini']['models']['gemini-flash']['cooldown_seconds'] > 0
+            assert restarted.direct_status()['groq']['models']['groq-reasoning']['cooldown_seconds'] > 0
             restarted.db.close()
     asyncio.run(scenario())
 
@@ -163,12 +163,12 @@ def test_full_chain_exhaustion_reaches_local_reasoning(monkeypatch):
         app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(ollama), base_url='http://litellm')
         response = client.post('/v1/chat/completions', json={'model': 'auto', 'messages': [{'role': 'user', 'content': 'review system architecture'}]})
         assert response.status_code == 200
-        assert len(attempts) == 7
-        assert attempts[-3:] == ['openrouter.ai']*3
+        assert len(attempts) == 8
+        assert attempts[-4:] == ['openrouter.ai']*4
         assert local[0]['model'] == 'local-reasoning'
         assert response.headers['x-fallback-reason'] == 'online-pools-unavailable-or-exhausted'
         quota = client.get('/quota').json()['providers']
-        assert quota['openrouter']['local_daily_estimate']['used'] == 3
+        assert quota['openrouter']['local_daily_estimate']['used'] == 4
         assert quota['groq']['models']['groq-reasoning']['local_daily_estimate']['used'] == 1
 
 
@@ -187,4 +187,4 @@ def test_direct_stream_preserves_bytes_and_no_replay(monkeypatch):
         app.state.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(public))
         with pytest.raises(httpx.ReadError):
             client.post('/v1/chat/completions', json={'model': 'free-code', 'messages': [], 'stream': True})
-        assert calls == ['generativelanguage.googleapis.com']
+        assert calls == ['api.groq.com']
