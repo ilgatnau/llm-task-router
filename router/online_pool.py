@@ -1,4 +1,5 @@
 """Independent free-tier providers, followed by the verified OpenRouter free pool."""
+import asyncio
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import httpx
 import yaml
 
 from router.free_pool import CHAT_FIELDS, Pool
+from router.provider_errors import rejected_request_summary
 
 # Reviewed against official pricing/free-plan docs on 2026-10-28.
 # Account-tier checks are not available through these inference APIs.
@@ -138,8 +140,8 @@ class OnlinePool(Pool):
         if any(isinstance(m.get('content'), list) and any(not isinstance(p, dict) or p.get('type') != 'text' for p in m['content']) for m in payload['messages']):
             self.report_candidate(on_event, 'online', None, 'hosted-media-disabled')
             return None, 'hosted-media-disabled'
-        async with self.lock:
-            for alias in self.online['tasks'][task]:
+        for alias in self.online['tasks'][task]:
+            async with self.lock:
                 entry = self.online['models'][alias]
                 provider = entry['provider']
                 info = self.direct_status()[provider]
@@ -160,26 +162,35 @@ class OnlinePool(Pool):
                     continue
                 self.report_candidate(on_event, provider, entry['model'], 'attempting')
                 body = dict(payload, model=entry['model'])
+                if provider == 'groq' and body.get('reasoning_effort') in ('none', 'minimal', 'xhigh'):
+                    effort = body.pop('reasoning_effort')
+                    if effort != 'none':
+                        body['reasoning_effort'] = 'low' if effort == 'minimal' else 'high'
                 with self.db:
                     row = self.db.execute('INSERT INTO direct_attempts VALUES (?,?,NULL)', (time.time(), alias)).lastrowid
-                try:
+            try:
+                async with asyncio.timeout(self.header_timeout):
                     response = await self.client.send(self.client.build_request('POST', PROVIDERS[provider]['url'],
                         json=body, headers={'Authorization': f'Bearer {self.keys[provider]}'}), stream=True)
-                except httpx.RequestError:
-                    self.report_candidate(on_event, provider, entry['model'], 'network-error')
-                    continue
-                with self.db:
-                    self.db.execute('UPDATE direct_attempts SET status=? WHERE rowid=?', (response.status_code, row))
-                self.observe(alias, response)
-                self.report_candidate(on_event, provider, entry['model'],
-                                      'selected' if response.status_code < 400 else 'upstream-error', response.status_code)
-                if response.status_code < 400:
-                    return response, provider+'/'+entry['model']
-                await response.aclose()
-                if response.status_code in (401, 402, 403):
-                    self.save('provider:'+provider, {'until': time.time()+300, 'status': response.status_code})
-                # A model-specific rejection must not bypass other online candidates.
-                # Each configured model is attempted at most once; never replay a stream.
+            except (TimeoutError, httpx.ReadTimeout):
+                self.report_candidate(on_event, provider, entry['model'], 'response-header-timeout')
+                continue
+            except httpx.RequestError:
+                self.report_candidate(on_event, provider, entry['model'], 'network-error')
+                continue
+            with self.db:
+                self.db.execute('UPDATE direct_attempts SET status=? WHERE rowid=?', (response.status_code, row))
+            self.observe(alias, response)
+            summary = await rejected_request_summary(response) if response.status_code >= 400 else None
+            self.report_candidate(on_event, provider, entry['model'],
+                                  'selected' if response.status_code < 400 else 'upstream-error', response.status_code, error_summary=summary)
+            if response.status_code < 400:
+                return response, provider+'/'+entry['model']
+            await response.aclose()
+            if response.status_code in (401, 402, 403):
+                self.save('provider:'+provider, {'until': time.time()+300, 'status': response.status_code})
+            # A model-specific rejection must not bypass other online candidates.
+            # Each configured model is attempted at most once; never replay a stream.
         # This independent pool retains its own shared daily cap and pricing checks.
         response, selected = await super().send(task, payload, on_event=on_event)
         if response is not None:

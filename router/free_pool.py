@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ import httpx
 import yaml
 
 from router.chat import CHAT_FIELDS
+from router.provider_errors import rejected_request_summary
 
 
 def free_entry(entry):
@@ -27,6 +29,10 @@ def free_entry(entry):
 
 class Pool:
     def __init__(self, client, key, path=':memory:', config_path='free-pool.yaml'):
+        self.header_timeout = float(os.getenv('ONLINE_HEADER_TIMEOUT_SECONDS', '45'))
+        if not math.isfinite(self.header_timeout) or self.header_timeout <= 0:
+            raise ValueError('ONLINE_HEADER_TIMEOUT_SECONDS must be a positive finite number')
+        self.metadata_timeout = 8
         self.client, self.key = client, key
         self.config = yaml.safe_load(Path(config_path).read_text())
         self.models = self.config['models']
@@ -59,7 +65,8 @@ class Pool:
             self.quota_error = 'OPENROUTER_API_KEY not configured'
             return
         try:
-            r = await self.client.get('/key', headers={'Authorization': f'Bearer {self.key}'})
+            async with asyncio.timeout(self.metadata_timeout):
+                r = await self.client.get('/key', headers={'Authorization': f'Bearer {self.key}'})
             r.raise_for_status()
             data = r.json()['data'].get('free_model_daily_requests')
             if isinstance(data, dict) and all(isinstance(data.get(k), (int, float)) and not isinstance(data[k], bool) and data[k] >= 0 for k in ('used', 'limit', 'remaining')):
@@ -69,7 +76,7 @@ class Pool:
                 self.remote_at = time.time()
             else:
                 self.quota_error = 'Provider did not report a free-request counter; local estimate only'
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        except (TimeoutError, httpx.HTTPError, ValueError, KeyError, TypeError):
             self.quota_error = 'Quota API unavailable; local estimate only'
 
     def status(self):
@@ -113,20 +120,24 @@ class Pool:
         with self.db:
             self.db.execute('UPDATE attempts SET status=? WHERE rowid=?', (status, row))
 
-    def report_candidate(self, on_event, provider, model, reason, status=None):
+    def report_candidate(self, on_event, provider, model, reason, status=None, error_summary=None):
         # Only router-owned metadata: never include request/response bodies or keys.
         self.last_event = {'provider': provider, 'model': model, 'reason': reason}
         if status is not None:
             self.last_event['status'] = status
+        if error_summary:
+            self.last_event['error_summary'] = error_summary
         if on_event is not None:
             detail = f'{provider}/{model}: {reason}' if model else f'{provider}: {reason}'
             if status is not None:
                 detail += f' (HTTP {status})'
+            if error_summary:
+                detail += ': ' + error_summary
             state = {'attempting': 'trying', 'selected': 'selected', 'upstream-error': 'rejected',
-                     'network-error': 'failed'}.get(reason, 'skipped')
+                     'network-error': 'failed', 'response-header-timeout': 'failed'}.get(reason, 'skipped')
             on_event('online-candidate', detail, candidate={
                 'provider': provider, 'model': model, 'reason': reason,
-                'state': state, 'http_status': status})
+                'state': state, 'http_status': status, 'error_summary': error_summary})
 
     async def send(self, task, payload, on_event=None):
         """Return (response, model), or (None, reason) to continue locally."""
@@ -142,15 +153,25 @@ class Pool:
             content = message.get('content')
             if isinstance(content, list) and any(not isinstance(p, dict) or p.get('type') != 'text' for p in content):
                 return None, 'hosted-media-disabled'
-        async with self.lock:
-            try:
+        if on_event:
+            on_event('online-progress', 'Checking OpenRouter model catalog.', state='checking-online-catalog', pending_backend='OpenRouter model catalog')
+        try:
+            async with asyncio.timeout(self.metadata_timeout):
                 await self.validate_catalog()
-            except (httpx.HTTPError, ValueError, KeyError, TypeError):
-                self.report_candidate(on_event, 'openrouter', None, 'free-pricing-unverified')
-                return None, 'free-pricing-unverified'
-            for alias in self.config['tasks'][task]:
-                # Refresh for each attempt. All models share this provider-wide allowance.
-                await self.refresh_quota()
+        except (TimeoutError, httpx.HTTPError, ValueError, KeyError, TypeError):
+            self.report_candidate(on_event, 'openrouter', None, 'free-pricing-unverified')
+            return None, 'free-pricing-unverified'
+        for alias in self.config['tasks'][task]:
+            # Refresh for each attempt. All models share this provider-wide allowance.
+            if on_event:
+                on_event('online-progress', 'Checking OpenRouter quota.', state='checking-online-quota', pending_backend='OpenRouter quota')
+            try:
+                async with asyncio.timeout(self.metadata_timeout):
+                    await self.refresh_quota()
+            except TimeoutError:
+                self.report_candidate(on_event, 'openrouter', None, 'quota-check-timeout')
+                return None, 'quota-check-timeout'
+            async with self.lock:
                 state = Pool.status(self)
                 if state['conservative_remaining_daily'] <= 0:
                     self.report_candidate(on_event, 'openrouter', None, 'shared-daily-quota-exhausted')
@@ -175,35 +196,40 @@ class Pool:
                     # Reserve pessimistically until the next provider refresh.
                     self.remote['remaining'] = max(0, self.remote['remaining']-1)
                     self.remote['used'] += 1
-                try:
+            try:
+                async with asyncio.timeout(self.header_timeout):
                     response = await self.client.send(self.client.build_request('POST', '/chat/completions',
                         json=body, headers={'Authorization': f'Bearer {self.key}'}), stream=True)
-                except httpx.RequestError:
-                    self.outcome(attempt, 0)
-                    self.report_candidate(on_event, 'openrouter', model, 'network-error')
-                    continue
-                self.outcome(attempt, response.status_code)
-                if response.status_code < 400:
-                    self.report_candidate(on_event, 'openrouter', model, 'selected', response.status_code)
-                    return response, model
-                # Close without reading or exposing upstream error bodies.
-                await response.aclose()
-                self.report_candidate(on_event, 'openrouter', model, 'upstream-error', response.status_code)
-                if response.status_code in (401, 402, 403):
-                    return None, 'free-provider-unavailable'
-                if response.status_code == 429:
-                    # OpenRouter platform-limit headers identify a shared limit, not a model's capacity.
-                    if 'x-ratelimit-limit' in response.headers:
-                        try:
-                            delay = min(86400, max(1, float(response.headers.get('retry-after', '60'))))
-                        except ValueError:
-                            delay = 60
-                        self.shared_until = time.time()+delay
-                        return None, 'shared-provider-rate-limit'
+            except (TimeoutError, httpx.ReadTimeout):
+                self.outcome(attempt, 0)
+                self.report_candidate(on_event, 'openrouter', model, 'response-header-timeout')
+                continue
+            except httpx.RequestError:
+                self.outcome(attempt, 0)
+                self.report_candidate(on_event, 'openrouter', model, 'network-error')
+                continue
+            self.outcome(attempt, response.status_code)
+            if response.status_code < 400:
+                self.report_candidate(on_event, 'openrouter', model, 'selected', response.status_code)
+                return response, model
+            summary = await rejected_request_summary(response)
+            await response.aclose()
+            self.report_candidate(on_event, 'openrouter', model, 'upstream-error', response.status_code, error_summary=summary)
+            if response.status_code in (401, 402, 403):
+                return None, 'free-provider-unavailable'
+            if response.status_code == 429:
+                # OpenRouter platform-limit headers identify a shared limit, not a model's capacity.
+                if 'x-ratelimit-limit' in response.headers:
                     try:
                         delay = min(86400, max(1, float(response.headers.get('retry-after', '60'))))
                     except ValueError:
                         delay = 60
-                    with self.db:
-                        self.db.execute('INSERT OR REPLACE INTO cooldowns VALUES (?,?)', (model, time.time()+delay))
-            return None, 'free-pool-exhausted'
+                    self.shared_until = time.time()+delay
+                    return None, 'shared-provider-rate-limit'
+                try:
+                    delay = min(86400, max(1, float(response.headers.get('retry-after', '60'))))
+                except ValueError:
+                    delay = 60
+                with self.db:
+                    self.db.execute('INSERT OR REPLACE INTO cooldowns VALUES (?,?)', (model, time.time()+delay))
+        return None, 'free-pool-exhausted'

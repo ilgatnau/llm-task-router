@@ -210,9 +210,8 @@ async def completions(request: Request):
 async def quota():
     if app.state.local_only:
         return {'mode': 'local-only', 'hosted_requests_enabled': False, 'provider_quota': None, 'note': 'Local inference has no provider request quota. Capacity is limited by RAM/VRAM, compute and context size.'}
-    async with app.state.pool.lock:
-        await app.state.pool.refresh_quota()
-        return app.state.pool.status()
+    await app.state.pool.refresh_quota()
+    return app.state.pool.status()
 
 
 @app.get('/', include_in_schema=False)
@@ -244,8 +243,7 @@ async def dashboard_data(refresh: bool = False):
     if refresh and app.state.pool is not None:
         try:
             async with asyncio.timeout(8):
-                async with app.state.pool.lock:
-                    await app.state.pool.refresh_quota()
+                await app.state.pool.refresh_quota()
             refresh_note = 'OpenRouter counter refreshed when supplied. Gemini and Groq use observations from inference responses.'
         except TimeoutError:
             refresh_note = 'Quota refresh timed out; showing saved observations.'

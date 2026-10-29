@@ -80,7 +80,7 @@ class RoutingActivity:
                   'rule': rule, 'rule_order': matched[0] if matched else None,
                   'pattern': matched[1]['pattern'] if matched else None,
                   'explanation': explanation, 'configured_route': configured,
-                  'model': model, 'upstream_model': None, 'fallback_reason': None,
+                  'model': model, 'upstream_model': None, 'pending_backend': None, 'fallback_reason': None,
                   'status': None, 'duration_ms': None, 'bytes_received': 0,
                   'first_byte_ms': None, 'last_data_at': None, 'response_phase': None,
                   'reasoning_chunks': 0, 'answer_chunks': 0, 'events': [], 'failover_path': []}
@@ -102,6 +102,14 @@ class RoutingActivity:
                 previous = {'started_at': time.time()}
                 path.append(previous)
             previous.update(candidate, updated_at=time.time())
+            if candidate['state'] == 'trying':
+                fields.setdefault('pending_backend', candidate['provider'] + '/' + (candidate['model'] or 'availability'))
+                fields.setdefault('state', 'waiting-provider-headers')
+            else:
+                fields.setdefault('pending_backend', None)
+                if record['state'] == 'waiting-provider-headers' and candidate['state'] != 'selected':
+                    fields.setdefault('state', 'routing')
+
         record.update(fields)
         record['updated_at'] = time.time()
         elapsed = round((time.monotonic()-self.started[record['request_id']])*1000)

@@ -247,3 +247,29 @@ def test_openrouter_rejection_tries_next_verified_free_candidate():
             await response.aclose()
             pool.db.close()
     run(scenario())
+
+
+@pytest.mark.parametrize('phase', ['catalog', 'quota', 'headers'])
+def test_openrouter_slow_calls_are_bounded(phase):
+    async def scenario():
+        pool = None
+        async def handler(request):
+            if request.url.path.endswith('/models'):
+                if phase == 'catalog':
+                    await asyncio.Event().wait()
+                return httpx.Response(200, json={'data': [entry(m) for m in pool.models.values()]})
+            if request.url.path.endswith('/key'):
+                if phase == 'quota':
+                    await asyncio.Event().wait()
+                return httpx.Response(200, json={'data': {}})
+            await asyncio.Event().wait()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url='https://openrouter.ai/api/v1') as client:
+            pool = Pool(client, 'test-key')
+            pool.header_timeout = pool.metadata_timeout = .02
+            events = []
+            response, reason = await asyncio.wait_for(pool.send('free-code', {'messages': []},
+                on_event=lambda n, m, **f: events.append(m)), 1)
+            assert response is None
+            assert any(('free-pricing-unverified' if phase == 'catalog' else 'quota-check-timeout' if phase == 'quota' else 'response-header-timeout') in e for e in events)
+            pool.db.close()
+    run(scenario())

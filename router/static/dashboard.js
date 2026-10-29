@@ -104,7 +104,7 @@ function renderLastRoute() {
     row.append(el('small', '', `${index + 1} · ${names[step.provider] || step.provider}`),
       el('code', '', prettyModel(step.model || 'Provider availability')),
       badge(human(step.state), ['selected', 'completed'].includes(step.state) ? 'green' : step.state === 'trying' ? 'purple' : 'amber'),
-      el('p', '', human(step.reason) + (step.http_status ? ' · HTTP ' + step.http_status : '')));
+      el('p', '', human(step.reason) + (step.http_status ? ' · HTTP ' + step.http_status : '') + (step.error_summary ? ' · ' + step.error_summary : '')));
     path.append(row);
   });
   if (!path.children.length) path.append(el('li', 'muted', 'Selecting a route…'));
@@ -118,8 +118,8 @@ function renderLastRoute() {
   if (route.reasoning_chunks) meta.append(badge('Reasoning: ' + route.reasoning_chunks + ' chunks', 'neutral'));
   if (route.answer_chunks) meta.append(badge('Answer: ' + route.answer_chunks + ' chunks', 'neutral'));
   if (route.status) meta.append(badge('HTTP ' + route.status, 'neutral'));
-  summary.append(meta, el('p', '', 'Backend: ' + (route.upstream_model || 'Selecting an eligible model…')));
-  if (active) summary.append(el('p', 'muted', route.bytes_received ? `Last response data ${elapsed(route.idle_ms)} ago. Bytes can include reasoning or keep-alives.` : 'No response bytes yet. The backend may be loading the model or processing the prompt; this request has not completed.'));
+  summary.append(meta, el('p', '', 'Backend: ' + (route.upstream_model || (route.pending_backend ? route.pending_backend + ' · waiting' : active ? 'Selecting an eligible model…' : 'No backend accepted the request'))));
+  if (active) summary.append(el('p', 'muted', route.bytes_received ? `Last response data ${elapsed(route.idle_ms)} ago. Bytes can include reasoning or keep-alives.` : route.pending_backend ? 'Waiting on ' + route.pending_backend + '. Online response headers are time-limited; the next candidate is tried on timeout.' : 'No response bytes yet. The backend may be loading the model or processing the prompt; this request has not completed.'));
   if (state.active_routes?.length > 1) summary.append(el('p', 'muted', `${state.active_routes.length} concurrent requests are active. Showing the most recently started one.`));
   if (route.fallback_reason) summary.append(el('p', '', 'Fallback: ' + human(route.fallback_reason)));
   summary.append(el('p', 'muted', `Request ${route.request_id} · Started ${timestamp(route.started_at)}${route.completed_at ? ' · Finished ' + timestamp(route.completed_at) : ''}`));

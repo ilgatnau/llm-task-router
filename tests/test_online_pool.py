@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from router.app import app, select_model
+from router.activity import RoutingActivity
 from router.online_pool import OnlinePool, delay_seconds
 
 
@@ -281,3 +282,86 @@ def test_groq_success_never_invokes_ollama_or_another_provider(monkeypatch, stre
         assert calls == ['api.groq.com']
         path = client.get('/api/routing').json()['latest_completed_route']['failover_path']
         assert len(path) == 1 and path[0]['provider'] == 'groq' and path[0]['state'] == 'completed'
+
+
+@pytest.mark.parametrize('effort,expected', [('none', None), ('minimal', 'low'), ('xhigh', 'high'), ('medium', 'medium')])
+def test_groq_reasoning_compatibility(monkeypatch, effort, expected):
+    enable(monkeypatch)
+    async def scenario():
+        def handler(request):
+            body = json.loads(request.content)
+            assert body.get('reasoning_effort') == expected
+            return httpx.Response(200, json={'choices': []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            pool = OnlinePool(client, '')
+            response, model = await pool.send('free-code', {'messages': [], 'reasoning_effort': effort})
+            assert model.startswith('groq/')
+            await response.aclose()
+            pool.db.close()
+    asyncio.run(scenario())
+
+
+def test_slow_headers_do_not_serialize_other_requests_and_are_visible(monkeypatch):
+    enable(monkeypatch)
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+        async def handler(request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+            return httpx.Response(200, json={'choices': []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            pool = OnlinePool(client, '')
+            activity = RoutingActivity()
+            route = activity.start('free-code', 'default', {'default': 'free-code', 'rules': []})
+            first = asyncio.create_task(pool.send('free-code', {'messages': []}, on_event=lambda n, m, **f: activity.event(route, n, m, **f)))
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                assert route['pending_backend'] == 'groq/openai/gpt-oss-120b'
+                assert route['state'] == 'waiting-provider-headers'
+                second_response, _ = await asyncio.wait_for(pool.send('free-code', {'messages': []}), 1)
+                await second_response.aclose()
+            finally:
+                release.set()
+                response, _ = await first
+                await response.aclose()
+                pool.db.close()
+    asyncio.run(scenario())
+
+
+def test_online_header_timeout_tries_next_model(monkeypatch):
+    enable(monkeypatch)
+    async def scenario():
+        calls = []
+        async def handler(request):
+            calls.append(json.loads(request.content)['model'])
+            if len(calls) == 1:
+                await asyncio.Event().wait()
+            return httpx.Response(200, json={'choices': []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            pool = OnlinePool(client, '')
+            pool.header_timeout = .02
+            events = []
+            response, selected = await asyncio.wait_for(pool.send('free-code', {'messages': []},
+                on_event=lambda n, m, **f: events.append(m)), 1)
+            assert selected == 'groq/openai/gpt-oss-20b'
+            assert any('response-header-timeout' in e for e in events)
+            await response.aclose()
+            pool.db.close()
+    asyncio.run(scenario())
+
+
+def test_provider_error_summary_redacts_arbitrary_text(monkeypatch):
+    enable(monkeypatch)
+    async def scenario():
+        from router.provider_errors import rejected_request_summary
+        response = httpx.Response(400, json={'error': {'code': 'tool_use_failed',
+            'message': 'Secret tool arguments and token abc123; invalid reasoning_effort',
+            'failed_generation': 'never-publish-this'}})
+        summary = await rejected_request_summary(response)
+        assert summary == 'tool_use_failed; referenced fields: reasoning_effort'
+        assert 'Secret' not in summary and 'abc123' not in summary
+    asyncio.run(scenario())
