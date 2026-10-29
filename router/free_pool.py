@@ -113,9 +113,25 @@ class Pool:
         with self.db:
             self.db.execute('UPDATE attempts SET status=? WHERE rowid=?', (status, row))
 
-    async def send(self, task, payload):
+    def report_candidate(self, on_event, provider, model, reason, status=None):
+        # Only router-owned metadata: never include request/response bodies or keys.
+        self.last_event = {'provider': provider, 'model': model, 'reason': reason}
+        if status is not None:
+            self.last_event['status'] = status
+        if on_event is not None:
+            detail = f'{provider}/{model}: {reason}' if model else f'{provider}: {reason}'
+            if status is not None:
+                detail += f' (HTTP {status})'
+            state = {'attempting': 'trying', 'selected': 'selected', 'upstream-error': 'rejected',
+                     'network-error': 'failed'}.get(reason, 'skipped')
+            on_event('online-candidate', detail, candidate={
+                'provider': provider, 'model': model, 'reason': reason,
+                'state': state, 'http_status': status})
+
+    async def send(self, task, payload, on_event=None):
         """Return (response, model), or (None, reason) to continue locally."""
         if not self.key:
+            self.report_candidate(on_event, 'openrouter', None, 'missing-api-key')
             return None, 'missing-free-api-key'
         if set(payload)-CHAT_FIELDS:
             return None, 'unsupported-hosted-parameters'
@@ -130,25 +146,30 @@ class Pool:
             try:
                 await self.validate_catalog()
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
+                self.report_candidate(on_event, 'openrouter', None, 'free-pricing-unverified')
                 return None, 'free-pricing-unverified'
             for alias in self.config['tasks'][task]:
                 # Refresh for each attempt. All models share this provider-wide allowance.
                 await self.refresh_quota()
                 state = Pool.status(self)
                 if state['conservative_remaining_daily'] <= 0:
+                    self.report_candidate(on_event, 'openrouter', None, 'shared-daily-quota-exhausted')
                     return None, 'shared-daily-quota-exhausted'
                 if state['local_minute_estimate']['remaining'] <= 0 or self.shared_until > time.time():
+                    self.report_candidate(on_event, 'openrouter', None, 'shared-minute-limit')
                     return None, 'shared-minute-limit'
                 model = self.models[alias]
                 row = self.db.execute('SELECT until FROM cooldowns WHERE model=?', (model,)).fetchone()
                 if row and row[0] > time.time():
+                    self.report_candidate(on_event, 'openrouter', model, 'model-cooldown')
                     continue
                 if not free_entry(self.catalog.get(model, {})):
-                    self.last_event = {'model': model, 'reason': 'not-verified-zero-price-with-tools'}
+                    self.report_candidate(on_event, 'openrouter', model, 'not-verified-zero-price-with-tools')
                     continue
                 body = dict(payload, model=model)
                 # Cap every provider token price at zero; do not enable plugins or model fallbacks.
                 body['provider'] = {'max_price': {'prompt': 0, 'completion': 0}, 'require_parameters': True}
+                self.report_candidate(on_event, 'openrouter', model, 'attempting')
                 attempt = self.record(model)
                 if self.remote is not None:
                     # Reserve pessimistically until the next provider refresh.
@@ -159,20 +180,17 @@ class Pool:
                         json=body, headers={'Authorization': f'Bearer {self.key}'}), stream=True)
                 except httpx.RequestError:
                     self.outcome(attempt, 0)
-                    self.last_event = {'model': model, 'reason': 'network-error'}
+                    self.report_candidate(on_event, 'openrouter', model, 'network-error')
                     continue
                 self.outcome(attempt, response.status_code)
                 if response.status_code < 400:
-                    self.last_event = {'model': model, 'reason': 'selected'}
+                    self.report_candidate(on_event, 'openrouter', model, 'selected', response.status_code)
                     return response, model
-                # Read before closing, but never return upstream error text (can contain sensitive data).
-                await response.aread()
+                # Close without reading or exposing upstream error bodies.
                 await response.aclose()
-                self.last_event = {'model': model, 'reason': 'upstream-error', 'status': response.status_code}
+                self.report_candidate(on_event, 'openrouter', model, 'upstream-error', response.status_code)
                 if response.status_code in (401, 402, 403):
                     return None, 'free-provider-unavailable'
-                if response.status_code not in (404, 408, 429, 500, 502, 503, 504):
-                    return None, 'free-request-rejected'
                 if response.status_code == 429:
                     # OpenRouter platform-limit headers identify a shared limit, not a model's capacity.
                     if 'x-ratelimit-limit' in response.headers:

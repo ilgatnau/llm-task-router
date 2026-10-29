@@ -126,10 +126,12 @@ async def completions(request: Request):
         headers['x-fallback-reason'] = local_reason
         activity.event(route, 'local-only-override', 'Local-only mode maps the configured online route to a local model.', fallback_reason=local_reason)
     upstream = None
+    local_candidate = None
     try:
         if model.startswith('free-'):
             activity.event(route, 'online-selection', 'Selecting an eligible free online model using the configured task pool.')
-            upstream, selected = await app.state.pool.send(model, payload)
+            upstream, selected = await app.state.pool.send(model, payload,
+                on_event=lambda name, message, **fields: activity.event(route, name, message, **fields))
             if upstream is not None:
                 headers['x-upstream-model'] = selected
                 activity.event(route, 'upstream-selected', 'An online candidate accepted the request.', upstream_model=selected, status=upstream.status_code)
@@ -140,13 +142,22 @@ async def completions(request: Request):
         if upstream is None:
             payload['model'] = model
             backend = 'ollama/' + app.state.local_models[model].removeprefix('ollama_chat/')
-            activity.event(route, 'local-selection', 'Sending the request through LiteLLM to the local Ollama model.', upstream_model=backend, state='waiting')
+            local_candidate = {'provider': 'ollama', 'model': backend.removeprefix('ollama/'),
+                               'state': 'trying', 'http_status': None,
+                               'reason': 'local-fallback' if route['fallback_reason'] else 'local-rule-or-explicit-selection'}
+            activity.event(route, 'local-selection', 'Sending the request through LiteLLM to the local Ollama model.',
+                           upstream_model=backend, state='waiting', candidate=local_candidate)
             try:
                 upstream = await app.state.client.send(app.state.client.build_request('POST', '/v1/chat/completions', json=payload), stream=True)
             except httpx.RequestError as exc:
                 activity.event(route, 'local-connection-error', 'LiteLLM did not provide a response: ' + type(exc).__name__, status=502)
                 raise HTTPException(502, 'Local LiteLLM unavailable', headers=headers)
-        activity.event(route, 'response-started', 'Upstream response headers received; generation has not completed yet.', status=upstream.status_code)
+        if local_candidate is not None:
+            local_candidate = {**local_candidate, 'http_status': upstream.status_code,
+                               'state': 'rejected' if upstream.is_error else 'selected',
+                               'reason': 'upstream-error' if upstream.is_error else 'selected'}
+        activity.event(route, 'response-started', 'Upstream response headers received; generation has not completed yet.',
+                       status=upstream.status_code, candidate=local_candidate)
         if upstream.is_error or not payload.get('stream'):
             try:
                 body = await upstream.aread()

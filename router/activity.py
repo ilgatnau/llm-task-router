@@ -83,7 +83,7 @@ class RoutingActivity:
                   'model': model, 'upstream_model': None, 'fallback_reason': None,
                   'status': None, 'duration_ms': None, 'bytes_received': 0,
                   'first_byte_ms': None, 'last_data_at': None, 'response_phase': None,
-                  'reasoning_chunks': 0, 'answer_chunks': 0, 'events': []}
+                  'reasoning_chunks': 0, 'answer_chunks': 0, 'events': [], 'failover_path': []}
         self.active[record['request_id']] = record
         self.started[record['request_id']] = time.monotonic()
         self.event(record, 'rule-selected', explanation)
@@ -92,14 +92,26 @@ class RoutingActivity:
     def event(self, record, name, message, **fields):
         if record['request_id'] not in self.active:
             return
+        candidate = fields.pop('candidate', None)
+        if candidate is not None:
+            # A candidate's attempt/outcome occupy one step in chronological order.
+            path = record['failover_path']
+            previous = next((step for step in path if (step['provider'], step['model']) ==
+                             (candidate['provider'], candidate['model'])), None)
+            if previous is None:
+                previous = {'started_at': time.time()}
+                path.append(previous)
+            previous.update(candidate, updated_at=time.time())
         record.update(fields)
         record['updated_at'] = time.time()
         elapsed = round((time.monotonic()-self.started[record['request_id']])*1000)
         event = {'at': record['updated_at'], 'event': name, 'message': message,
                  'model': record['model'], 'upstream_model': record['upstream_model'],
                  'status': record['status'], 'elapsed_ms': elapsed}
+        if candidate is not None:
+            event['candidate'] = deepcopy(candidate)
         record['events'].append(event)
-        # One request can encounter at most seven candidates; keep traces bounded.
+        # One request can encounter at most eight candidates; keep traces bounded.
         record['events'] = record['events'][-40:]
         logger.info('routing %s', json.dumps({'request_id': record['request_id'], 'rule': record['rule'], **event}))
 
@@ -107,6 +119,12 @@ class RoutingActivity:
         if record['request_id'] not in self.active:
             return
         elapsed = round((time.monotonic()-self.started[record['request_id']])*1000)
+        path = record['failover_path']
+        candidate = None
+        if path and path[-1]['state'] in ('trying', 'selected'):
+            candidate = {**path[-1], 'state': state, 'reason': message}
+        if candidate is not None:
+            fields['candidate'] = candidate
         self.event(record, state, message, state=state, completed_at=time.time(), duration_ms=elapsed, **fields)
         self.active.pop(record['request_id'], None)
         self.started.pop(record['request_id'], None)

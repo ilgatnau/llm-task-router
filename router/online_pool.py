@@ -128,12 +128,15 @@ class OnlinePool(Pool):
             snapshot['until'] = time.time()+wait
         self.save('model:'+alias, snapshot)
 
-    async def send(self, task, payload):
+    async def send(self, task, payload, on_event=None):
         if set(payload)-CHAT_FIELDS:
+            self.report_candidate(on_event, 'online', None, 'unsupported-hosted-parameters')
             return None, 'unsupported-hosted-parameters'
         if any(t.get('type') != 'function' for t in payload.get('tools', [])):
+            self.report_candidate(on_event, 'online', None, 'hosted-builtin-tools-disabled')
             return None, 'hosted-builtin-tools-disabled'
         if any(isinstance(m.get('content'), list) and any(not isinstance(p, dict) or p.get('type') != 'text' for p in m['content']) for m in payload['messages']):
+            self.report_candidate(on_event, 'online', None, 'hosted-media-disabled')
             return None, 'hosted-media-disabled'
         async with self.lock:
             for alias in self.online['tasks'][task]:
@@ -141,11 +144,21 @@ class OnlinePool(Pool):
                 provider = entry['provider']
                 info = self.direct_status()[provider]
                 model_info = info['models'][alias]
-                if (not info['enabled'] or info['provider_cooldown_seconds'] > 0 or
-                    model_info['cooldown_seconds'] > 0 or
-                    model_info['local_daily_estimate']['remaining'] <= 0 or
-                    model_info['local_minute_estimate']['remaining'] <= 0):
+                reason = None
+                if not info['enabled']:
+                    reason = info['disabled_reason']
+                elif info['provider_cooldown_seconds'] > 0:
+                    reason = 'provider-auth-or-payment-cooldown'
+                elif model_info['cooldown_seconds'] > 0:
+                    reason = 'provider-rate-limit-cooldown'
+                elif model_info['local_daily_estimate']['remaining'] <= 0:
+                    reason = 'local-daily-safety-cap-exhausted (not provider quota)'
+                elif model_info['local_minute_estimate']['remaining'] <= 0:
+                    reason = 'local-minute-safety-cap-exhausted (not provider quota)'
+                if reason:
+                    self.report_candidate(on_event, provider, entry['model'], reason)
                     continue
+                self.report_candidate(on_event, provider, entry['model'], 'attempting')
                 body = dict(payload, model=entry['model'])
                 with self.db:
                     row = self.db.execute('INSERT INTO direct_attempts VALUES (?,?,NULL)', (time.time(), alias)).lastrowid
@@ -153,21 +166,22 @@ class OnlinePool(Pool):
                     response = await self.client.send(self.client.build_request('POST', PROVIDERS[provider]['url'],
                         json=body, headers={'Authorization': f'Bearer {self.keys[provider]}'}), stream=True)
                 except httpx.RequestError:
-                    self.last_event = {'provider': provider, 'model': entry['model'], 'reason': 'network-error'}
+                    self.report_candidate(on_event, provider, entry['model'], 'network-error')
                     continue
                 with self.db:
                     self.db.execute('UPDATE direct_attempts SET status=? WHERE rowid=?', (response.status_code, row))
                 self.observe(alias, response)
-                self.last_event = {'provider': provider, 'model': entry['model'], 'status': response.status_code}
+                self.report_candidate(on_event, provider, entry['model'],
+                                      'selected' if response.status_code < 400 else 'upstream-error', response.status_code)
                 if response.status_code < 400:
                     return response, provider+'/'+entry['model']
                 await response.aclose()
                 if response.status_code in (401, 402, 403):
                     self.save('provider:'+provider, {'until': time.time()+300, 'status': response.status_code})
-                elif response.status_code not in (404, 408, 429, 500, 502, 503, 504):
-                    return None, provider+'-request-rejected'
+                # A model-specific rejection must not bypass other online candidates.
+                # Each configured model is attempted at most once; never replay a stream.
         # This independent pool retains its own shared daily cap and pricing checks.
-        response, selected = await super().send(task, payload)
+        response, selected = await super().send(task, payload, on_event=on_event)
         if response is not None:
             return response, 'openrouter/'+selected
         return None, 'online-pools-unavailable-or-exhausted'

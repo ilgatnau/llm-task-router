@@ -26,12 +26,15 @@ def test_waiting_request_visible_before_headers_and_then_completed(monkeypatch):
                     current = (await client.get('/api/routing')).json()['current_route']
                     assert current['rule'] == 'explicit-tests'
                     assert current['state'] == 'waiting' and current['bytes_received'] == 0
+                    assert current['failover_path'][0]['provider'] == 'ollama'
+                    assert current['failover_path'][0]['state'] == 'trying'
                     assert current['completed_at'] is None
                     assert current['rule_order'] == 2
                     assert 'first matching rule' in current['explanation']
                     release.set()
                     response = await request
                     state = (await client.get('/api/routing')).json()
+                    assert state['latest_completed_route']['failover_path'][0]['state'] == 'completed'
                     assert state['current_route'] is None
                     assert state['latest_completed_route']['state'] == 'completed'
                     assert state['latest_completed_route']['request_id'] == response.headers['x-route-request-id']

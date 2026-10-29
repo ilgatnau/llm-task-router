@@ -68,7 +68,7 @@ def test_keys_without_free_tier_confirmation_never_send(monkeypatch):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('status', [401, 402, 403, 429, 503])
+@pytest.mark.parametrize('status', [400, 401, 402, 403, 413, 422, 429, 503])
 def test_all_online_limits_fall_back_bounded(monkeypatch, status):
     enable(monkeypatch)
     async def scenario():
@@ -188,3 +188,96 @@ def test_direct_stream_preserves_bytes_and_no_replay(monkeypatch):
         with pytest.raises(httpx.ReadError):
             client.post('/v1/chat/completions', json={'model': 'free-code', 'messages': [], 'stream': True})
         assert calls == ['api.groq.com']
+
+
+@pytest.mark.parametrize('rejection', [400, 413, 422])
+def test_rejected_groq_requests_try_gemini_before_ollama(monkeypatch, rejection):
+    enable(monkeypatch)
+    monkeypatch.setenv('LOCAL_ONLY', 'false')
+    with TestClient(app) as client:
+        attempts = []
+        def public(request):
+            attempts.append(request.url.host)
+            if request.url.host == 'api.groq.com':
+                return httpx.Response(rejection, json={'error': 'secret-upstream-body'})
+            return httpx.Response(200, json={'choices': []})
+        def local(request):
+            raise AssertionError('An online rejection must not skip eligible Gemini models')
+        app.state.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(public))
+        app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(local))
+        response = client.post('/v1/chat/completions', json={
+            'model': 'auto', 'messages': [{'role': 'user', 'content': 'secret-user-prompt'}]})
+        assert response.status_code == 200
+        assert attempts == ['api.groq.com', 'api.groq.com', 'generativelanguage.googleapis.com']
+        assert response.headers['x-upstream-model'] == 'gemini/gemini-3.8-flash'
+        state = client.get('/api/routing').json()
+        path = state['latest_completed_route']['failover_path']
+        assert [(step['provider'], step['state']) for step in path] == [('groq', 'rejected'), ('groq', 'rejected'), ('gemini', 'completed')]
+        assert [step['http_status'] for step in path] == [rejection, rejection, 200]
+        messages = [e['message'] for e in state['latest_completed_route']['events']]
+        assert any(f'upstream-error (HTTP {rejection})' in m and 'groq/' in m for m in messages)
+        assert any('selected (HTTP 200)' in m and 'gemini/' in m for m in messages)
+        assert 'secret-upstream-body' not in json.dumps(state)
+        assert 'secret-user-prompt' not in json.dumps(state)
+        assert 'test-key' not in json.dumps(state)
+
+
+@pytest.mark.parametrize('skip', ['missing-api-key', 'free-tier-not-confirmed', 'daily-cap', 'minute-cap'])
+def test_online_skip_reasons_visible_with_remaining_provider_quota(monkeypatch, skip):
+    enable(monkeypatch)
+    monkeypatch.setenv('LOCAL_ONLY', 'false')
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    for provider in ('GEMINI', 'GROQ'):
+        if skip == 'missing-api-key':
+            monkeypatch.delenv(provider+'_API_KEY', raising=False)
+        elif skip == 'free-tier-not-confirmed':
+            monkeypatch.setenv(provider+'_FREE_TIER_CONFIRMED', 'false')
+    with TestClient(app) as client:
+        pool = app.state.pool
+        if skip in ('daily-cap', 'minute-cap'):
+            # Provider reports quota, but a separate local safety budget is full.
+            with pool.db:
+                for alias, model in pool.online['models'].items():
+                    pool.db.executemany('INSERT INTO direct_attempts VALUES (?,?,200)',
+                        [(time.time() - (120 if skip == 'daily-cap' else 0), alias)] * model['daily_safety_cap' if skip == 'daily-cap' else 'minute_safety_cap'])
+                    pool.observe(alias, httpx.Response(200, headers={'x-ratelimit-remaining-requests': '999'}))
+        def forbidden(request):
+            raise AssertionError('Disabled or budget-exhausted models must not be called')
+        pool.client = httpx.AsyncClient(transport=httpx.MockTransport(forbidden))
+        app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={'choices': []})), base_url='http://litellm')
+        response = client.post('/v1/chat/completions', json={'messages': [{'role': 'user', 'content': 'implement login'}]})
+        assert response.status_code == 200
+        state = client.get('/api/routing').json()
+        messages = [e['message'] for e in state['latest_completed_route']['events']]
+        expected = {'daily-cap': 'local-daily-safety-cap-exhausted (not provider quota)',
+                    'minute-cap': 'local-minute-safety-cap-exhausted (not provider quota)'}.get(skip, skip)
+        assert sum(expected in m and m.startswith(('groq/', 'gemini/')) for m in messages) == 4
+        assert any('openrouter: missing-api-key' in m for m in messages)
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_groq_success_never_invokes_ollama_or_another_provider(monkeypatch, stream):
+    enable(monkeypatch)
+    monkeypatch.setenv('LOCAL_ONLY', 'false')
+    with TestClient(app) as client:
+        calls = []
+        def public(request):
+            calls.append(request.url.host)
+            assert request.url.host == 'api.groq.com'
+            if stream:
+                class Events(httpx.AsyncByteStream):
+                    async def __aiter__(self):
+                        yield b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
+                return httpx.Response(200, stream=Events())
+            return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'ok'}}]})
+        def local(request):
+            raise AssertionError('A successful Groq request must never invoke Ollama')
+        app.state.pool.client = httpx.AsyncClient(transport=httpx.MockTransport(public))
+        app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(local))
+        response = client.post('/v1/chat/completions', json={'model': 'auto', 'messages': [{'role': 'user', 'content': 'implement pagination'}], 'stream': stream})
+        assert response.status_code == 200
+        assert response.headers['x-upstream-model'] == 'groq/openai/gpt-oss-120b'
+        assert 'x-fallback-reason' not in response.headers
+        assert calls == ['api.groq.com']
+        path = client.get('/api/routing').json()['latest_completed_route']['failover_path']
+        assert len(path) == 1 and path[0]['provider'] == 'groq' and path[0]['state'] == 'completed'

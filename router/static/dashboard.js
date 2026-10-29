@@ -91,13 +91,23 @@ function renderConfig() {
   renderRules();
 }
 function renderLastRoute() {
-  const route = currentRoute(), box = $('last-route'), summary = $('activity-summary'); box.replaceChildren(); summary.replaceChildren();
+  const route = currentRoute(), box = $('last-route'), summary = $('activity-summary'), path = $('request-path'); box.replaceChildren(); summary.replaceChildren(); path.replaceChildren();
   if (!route) {
     summary.append(el('p', 'activity-empty', 'Waiting for a routed request. Previews do not create request logs.'));
     box.textContent = 'No requests observed since this router started.';
     $('activity-status').textContent = 'No requests yet'; $('activity-status').className = 'badge neutral';
     return;
   }
+  (route.failover_path || []).forEach((step, index) => {
+    const row = el('li', 'request-step ' + step.state);
+    row.dataset.state = step.state;
+    row.append(el('small', '', `${index + 1} · ${names[step.provider] || step.provider}`),
+      el('code', '', prettyModel(step.model || 'Provider availability')),
+      badge(human(step.state), ['selected', 'completed'].includes(step.state) ? 'green' : step.state === 'trying' ? 'purple' : 'amber'),
+      el('p', '', human(step.reason) + (step.http_status ? ' · HTTP ' + step.http_status : '')));
+    path.append(row);
+  });
+  if (!path.children.length) path.append(el('li', 'muted', 'Selecting a route…'));
   const active = Boolean(state.current_route);
   $('activity-status').textContent = active ? 'Active · ' + human(route.state) : 'Latest · ' + human(route.state);
   $('activity-status').className = 'badge ' + (active ? 'purple' : route.state === 'completed' ? 'green' : 'amber');
@@ -115,7 +125,7 @@ function renderLastRoute() {
   summary.append(el('p', 'muted', `Request ${route.request_id} · Started ${timestamp(route.started_at)}${route.completed_at ? ' · Finished ' + timestamp(route.completed_at) : ''}`));
   if (route.pattern) {const details = el('details'); details.append(el('summary', 'muted', 'Matched rule pattern'), el('pre', '', route.pattern)); summary.append(details);}
   const events = el('ol', 'event-list');
-  (route.events || []).slice(-12).forEach(event => {const row = el('li'); row.append(el('time', '', timestamp(event.at) + ' · +' + elapsed(event.elapsed_ms)), el('strong', '', human(event.event)), el('p', '', event.message)); if (event.upstream_model) row.append(el('code', '', event.upstream_model)); events.append(row);});
+  (route.events || []).forEach(event => {const row = el('li'); row.append(el('time', '', timestamp(event.at) + ' · +' + elapsed(event.elapsed_ms)), el('strong', '', human(event.event)), el('p', '', event.message)); if (event.upstream_model) row.append(el('code', '', event.upstream_model)); events.append(row);});
   box.append(events);
   const signature = route.rule + ':' + active;
   if (activitySignature !== signature) {activitySignature = signature; renderRules();}

@@ -222,3 +222,28 @@ def test_chinese_reasoning_candidate_is_verified_before_use(availability):
             await response.aclose()
             pool.db.close()
     run(scenario())
+
+
+def test_openrouter_rejection_tries_next_verified_free_candidate():
+    async def scenario():
+        pool = None
+        attempts = []
+        def handler(request):
+            if request.url.path.endswith('/models'):
+                return httpx.Response(200, json={'data': [entry(m) for m in pool.models.values()]})
+            if request.url.path.endswith('/key'):
+                return httpx.Response(200, json={'data': {}})
+            attempts.append(json.loads(request.content))
+            return httpx.Response(400 if len(attempts) == 1 else 200, json={'choices': []})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url='https://openrouter.ai/api/v1') as client:
+            pool = Pool(client, 'test-key')
+            events = []
+            response, model = await pool.send('free-tests', {'messages': []},
+                on_event=lambda name, message, **fields: events.append(message))
+            assert response.status_code == 200 and model == pool.models['inkling']
+            assert len(attempts) == 2
+            assert any('upstream-error (HTTP 400)' in m for m in events)
+            assert all(a['provider']['max_price'] == {'prompt': 0, 'completion': 0} for a in attempts)
+            await response.aclose()
+            pool.db.close()
+    run(scenario())

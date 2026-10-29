@@ -35,6 +35,8 @@
     <section class="panel activity-panel" aria-labelledby="activity-heading">
       <div class="section-heading"><div><div class="eyebrow">LIVE ROUTING ACTIVITY</div><h2 id="activity-heading">Current / latest request</h2></div><span id="activity-status" class="badge neutral">No requests yet</span></div>
       <div id="activity-summary" aria-live="polite">Waiting for a routed request. Previews do not create request logs.</div>
+      <div class="failover-heading">Observed failover path</div>
+      <ol id="request-path" class="request-path" aria-label="Current or latest request model failover path"></ol>
       <p id="activity-freshness" class="footnote">Activity refreshes every 2 seconds. Each OpenCode prompt may make multiple model requests.</p>
     </section>
     <section id="providers" aria-labelledby="provider-heading">
